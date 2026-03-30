@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>digiPrint eDM — Update on your film</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0; padding:0; background-color:#dddddd;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#dddddd">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" border="0" cellspacing="0" cellpadding="0" style="width:600px; max-width:600px; background-color:#ffffff;">
+
+          <tr>
+            <td>
+              <img src="https://sitetech.com.au/digiPrint/edm/db_advice_r1.jpg" alt="header branding" width="600" style="width:100%; height:auto; display:block; border:0;">
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 20px; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height:1.6;">
+
+              <p>Hi {{ first_name }},</p>
+
+              <p>
+                Unfortunately the {{ blank_count }} roll{{ 's' if blank_count > 1 else '' }} you brought in to develop {{ 'were' if blank_count > 1 else 'was' }} blank.
+                Please show this email next time you process film as your prints &amp; / or scans will be at no charge. A Processing charge will still apply.
+              </p>
+
+              {% if blank_twins %}
+              <p><strong>Blank Roll ID{{ 's' if blank_twins|length > 1 else '' }}:</strong> {{ blank_twins | join(', ') }}</p>
+              {% endif %}
+
+              <h3 style="margin-top: 12px; margin-bottom: 8px;">Why would my film turn out blank?</h3>
+
+              <p style="font-size:14px; line-height:1.5; margin:0;"><strong>Extreme underexposure</strong></p>
+              <p style="font-size:13px; line-height:1.5; margin:4px 0 8px 0;">Very fast shutter, very small aperture, or ISO set far too high can leave frames effectively blank.</p>
+              <p style="font-size:13px; line-height:1.5; margin:0 0 12px 0; font-style:italic;">Tip: match ISO to the film box speed and use a light meter or auto mode in low light. If this was a disposable camera, the photos most likely were used in low light conditions without flash.</p>
+
+              <p style="font-size:14px; line-height:1.5; margin:0;"><strong>Unshot roll was developed</strong></p>
+              <p style="font-size:13px; line-height:1.5; margin:4px 0 12px 0;">A fresh roll got processed by mistake. Result is completely clear film with edge markings.</p>
+              <p style="font-size:13px; line-height:1.5; margin:0 0 12px 0; font-style:italic;">Tip: mark exposed rolls and keep fresh rolls in their canisters.</p>
+
+              <p style="font-size:14px; line-height:1.5; margin:0;"><strong>Camera opened mid-roll</strong></p>
+              <p style="font-size:13px; line-height:1.5; margin:4px 0 12px 0;">Opening the back floods the film with light. You might see uniform fog rather than images.</p>
+              <p style="font-size:13px; line-height:1.5; margin:0 0 12px 0; font-style:italic;">Tip: only open the back after rewinding fully.</p>
+
+              <p style="font-size:14px; line-height:1.5; margin:0;"><strong>Shutter didn't fire or is stuck</strong></p>
+              <p style="font-size:13px; line-height:1.5; margin:4px 0 12px 0;">Mechanical fault or low battery on electronic shutters.</p>
+              <p style="font-size:13px; line-height:1.5; margin:0 0 12px 0; font-style:italic;">Tip: replace the battery and fire a few test shots before your next roll.</p>
+
+              <p style="font-size:14px; line-height:1.5; margin:0;"><strong>Film didn't load or advance</strong></p>
+              <p style="font-size:13px; line-height:1.5; margin:4px 0 14px 0;">The leader didn't catch on the take-up spool. The counter moved, but the film didn't.</p>
+
+              <p style="font-size:13px; line-height:1.6; margin:8px 0 0 0; font-style:italic;">
+                Still unsure? Reply to this email with your camera model and any details you remember (ISO, mode, lighting). We'll take a closer look and help troubleshoot.
+              </p>
+
+              <p style="font-size:13px; color:#666; margin:16px 0 0 0;">
+                Order: <strong>{{ order_number }}</strong> · {{ store_name }}
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="padding:20px; background-color:#f0f0f0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left">
+                    <a href="https://www.facebook.com/digiDirect/"><img src="https://sitetech.com.au/digiPrint/edm/facebook.png" height="30" alt="FB" style="margin-right:10px;"></a>
+                    <a href="https://www.tiktok.com/@digidirect"><img src="https://sitetech.com.au/digiPrint/edm/tik-tok.png" height="30" alt="TT" style="margin-right:10px;"></a>
+                    <a href="https://www.instagram.com/digidirect/"><img src="https://sitetech.com.au/digiPrint/edm/instagram.png" height="30" alt="IG"></a>
+                  </td>
+                  <td align="right">
+                    <a href="https://www.digidirect.com.au">
+                      <img src="https://sitetech.com.au/digiPrint/edm/digiDirect_mono_420.png" height="30" alt="digiDirect logo">
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

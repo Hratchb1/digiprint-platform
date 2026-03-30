@@ -128,7 +128,13 @@ class RollRead(BaseModel):
         from_attributes = True
 
 
+class RollsAddPayload(BaseModel):
+    """Payload for adding rolls to an existing order"""
+    rolls: List[RollIntake]
+    operator_initials: Optional[str] = None
+
 # ── Orders ─────────────────────────────────────────────────────────────────
+
 
 class OrderCreate(BaseModel):
     """Manual intake - staff types customer details"""

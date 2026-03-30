@@ -3,8 +3,8 @@ import { ordersApi, storesApi } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, FilmIcon, ChevronRight, Filter } from 'lucide-react'
-import { formatDistanceToNow } from 'date-fns'
+import { Search, FilmIcon, ChevronRight } from 'lucide-react'
+import { format } from 'date-fns'
 import clsx from 'clsx'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -18,6 +18,12 @@ const STATUS_STYLES: Record<string, string> = {
 }
 
 const STATUSES = ['', 'booked', 'scanned', 'delivered', 'blank', 'print_ready', 'archived']
+
+function formatDate(iso: string | null | undefined) {
+  if (!iso) return '—'
+  try { return format(new Date(iso), 'dd MMM, HH:mm') }
+  catch { return '—' }
+}
 
 export default function OrdersPage() {
   const { user } = useAuth()
@@ -95,8 +101,8 @@ export default function OrdersPage() {
       {/* Table */}
       <div className="bg-[#111] border border-[#1e1e1e] rounded-xl overflow-hidden">
         {/* Header row */}
-        <div className="hidden md:grid grid-cols-[1fr_1fr_120px_80px_80px_100px_32px] gap-4 px-5 py-3 border-b border-[#1e1e1e]">
-          {['Order', 'Customer', 'Status', 'Store', 'Rolls', 'Created', ''].map(h => (
+        <div className="hidden md:grid grid-cols-[1fr_1fr_120px_80px_60px_120px_120px_32px] gap-4 px-5 py-3 border-b border-[#1e1e1e]">
+          {['Order', 'Customer', 'Status', 'Store', 'Rolls', 'Sale date', 'Booked in', ''].map(h => (
             <p key={h} className="text-[#444] text-xs uppercase tracking-wider font-medium">{h}</p>
           ))}
         </div>
@@ -111,7 +117,7 @@ export default function OrdersPage() {
               <Link
                 key={order.id}
                 to={`/orders/${order.id}`}
-                className="flex md:grid md:grid-cols-[1fr_1fr_120px_80px_80px_100px_32px] items-center gap-4 px-5 py-3.5 hover:bg-[#161616] transition-colors group"
+                className="flex md:grid md:grid-cols-[1fr_1fr_120px_80px_60px_120px_120px_32px] items-center gap-4 px-5 py-3.5 hover:bg-[#161616] transition-colors group"
               >
                 <div>
                   <p className="text-white text-sm font-mono font-medium truncate">{order.order_number}</p>
@@ -131,8 +137,13 @@ export default function OrdersPage() {
                   <FilmIcon size={11} />
                   <span>{order.rolls?.length ?? 0}</span>
                 </div>
+                {/* Sale date — from Pronto order_date if available */}
                 <p className="text-[#444] text-xs hidden md:block">
-                  {formatDistanceToNow(new Date(order.created_at), { addSuffix: true })}
+                  {order.order_date ? formatDate(order.order_date) : '—'}
+                </p>
+                {/* Booked in — when staff entered the order into RollCall */}
+                <p className="text-[#444] text-xs hidden md:block">
+                  {formatDate(order.created_at)}
                 </p>
                 <ChevronRight size={14} className="text-[#333] group-hover:text-[#555] hidden md:block" />
               </Link>

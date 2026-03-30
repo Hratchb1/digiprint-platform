@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>digiPrint eDM — Prints Ready</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    @media only screen and (max-width: 600px) {
+      .container { width:100% !important; }
+      .stack { display:block !important; width:100% !important; max-width:100% !important; }
+      img { height:auto !important; }
+      .explore-img { width:92% !important; max-width:280px !important; height:auto !important; }
+      .explore-title { font-size:16px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#dddddd;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#dddddd">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="container" width="600" border="0" cellspacing="0" cellpadding="0" style="width:600px; max-width:600px; background-color:#ffffff;">
+
+          <tr>
+            <td>
+              <img src="https://sitetech.com.au/digiPrint/edm/db_advice_r1.jpg" alt="header branding" width="600" style="width:100%; height:auto; display:block; border:0;">
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 20px; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; text-align: center; color: #333333;">
+              Your prints are ready to collect
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 0 20px 12px 20px; font-family: Arial, sans-serif; color: #333333; font-size:14px;">
+              <p style="margin:0 0 12px 0;">Hi {{ first_name }},</p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 0 20px 10px 20px; font-family: Arial, sans-serif; color: #333333;">
+              <img src="https://sitetech.com.au/digiPrint/edm/db_advice_r3.png" alt="Main image" width="560" style="max-width:560px; width:100%; height:auto; display:block; margin:10px auto 20px auto; border:0;">
+
+              <p style="font-size:14px; line-height:1.6; margin:0 0 10px 0;">
+                Your prints for <strong>Order {{ order_number }}</strong> are ready to pick up at <strong>{{ store_name }}</strong>.
+              </p>
+
+              <p style="font-size:14px; line-height:1.6; margin:12px 0 0 0;">
+                <strong>Collection details</strong><br>
+                Please visit the store counter with your order number. If someone else is collecting, make sure they have your name and order number.
+              </p>
+
+              <p style="font-size:14px; line-height:1.6; margin:12px 0 0 0;">
+                <strong>How long we hold your items</strong><br>
+                Prints are held in-store for up to <strong>4 weeks</strong> from your invoice date.<br>
+                Negatives are held in-store for up to <strong>2 weeks</strong> from your invoice date.<br>
+                Need us to hold them a bit longer? Just reply to this email.
+              </p>
+
+              <p style="font-size:13px; color:#666; margin:16px 0 0 0;">
+                Order: <strong>{{ order_number }}</strong> · {{ store_name }}
+              </p>
+            </td>
+          </tr>
+
+          <!-- MORE TO EXPLORE -->
+          <tr>
+            <td style="padding: 20px;">
+              <h2 style="font-family: Arial, sans-serif; font-size:16px; text-align:center; margin-bottom:20px;">More To Explore</h2>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://1458.app.fujifilmimagine.com/products/digital-print/all-digital-prints-28905/12/1/none" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/1.onLine_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="Print Online">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://1458.app.fujifilmimagine.com/products/digital-print/all-digital-prints-28905/12/1/none" target="_blank" style="text-decoration:none; color:#000000;">Print Online</a>
+                    </div>
+                  </td>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://www.digidirect.com.au/photo-accessories/film-darkroom-and-video-tapes" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/2.film_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="Shop Film">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://www.digidirect.com.au/photo-accessories/film-darkroom-and-video-tapes" target="_blank" style="text-decoration:none; color:#000000;">Shop Film</a>
+                    </div>
+                  </td>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://www.photoking.com" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/3.pk_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="ProPrint PhotoKing">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://www.photoking.com" target="_blank" style="text-decoration:none; color:#000000;">ProPrint PhotoKing</a>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-family: Arial, sans-serif; font-size:14px; text-align:center; margin-top:20px;">
+                Thank you for trusting digiDirect with your precious memories.
+              </p>
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="padding:20px; background-color:#f0f0f0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left">
+                    <a href="https://www.facebook.com/digiDirect/"><img src="https://sitetech.com.au/digiPrint/edm/facebook.png" height="30" alt="FB" style="margin-right:10px;"></a>
+                    <a href="https://www.tiktok.com/@digidirect"><img src="https://sitetech.com.au/digiPrint/edm/tik-tok.png" height="30" alt="TT" style="margin-right:10px;"></a>
+                    <a href="https://www.instagram.com/digidirect/"><img src="https://sitetech.com.au/digiPrint/edm/instagram.png" height="30" alt="IG"></a>
+                  </td>
+                  <td align="right">
+                    <a href="https://www.digidirect.com.au">
+                      <img src="https://sitetech.com.au/digiPrint/edm/digiDirect_mono_420.png" height="30" alt="digiDirect logo">
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

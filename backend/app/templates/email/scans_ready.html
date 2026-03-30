@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>digiPrint eDM — Scans Ready</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    @media only screen and (max-width: 600px) {
+      .container { width:100% !important; }
+      .stack { display:block !important; width:100% !important; max-width:100% !important; }
+      img { height:auto !important; }
+      .explore-img { width:92% !important; max-width:280px !important; height:auto !important; }
+      .explore-title { font-size:16px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#dddddd;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#dddddd">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="container" width="600" border="0" cellspacing="0" cellpadding="0" style="width:600px; max-width:600px; background-color:#ffffff;">
+
+          <!-- HEADER IMAGE -->
+          <tr>
+            <td>
+              <img src="https://sitetech.com.au/digiPrint/edm/db_advice_r1.jpg" alt="header branding" width="600" style="width:100%; height:auto; display:block; border:0;">
+            </td>
+          </tr>
+
+          <!-- HEADING -->
+          <tr>
+            <td style="padding: 20px; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; text-align: center; color: #333333;">
+              Your image files are ready
+            </td>
+          </tr>
+
+          <!-- GREETING -->
+          <tr>
+            <td style="padding: 16px 20px 12px 20px; font-family: Arial, sans-serif; color: #333333; font-size:14px;">
+              <p style="margin:0 0 12px 0;">Hi {{ first_name }},</p>
+            </td>
+          </tr>
+
+          {% if has_blanks %}
+          <!-- BLANK NOTICE (mixed order) -->
+          <tr>
+            <td style="padding: 0 20px 8px 20px; font-family: Arial, sans-serif; color: #333333;">
+              <p style="font-size:14px; line-height:1.6; margin:0 0 8px 0;">
+                Unfortunately {{ blank_count }} roll{{ 's' if blank_count > 1 else '' }} you brought in to develop was blank — please show this email for a credit of your prints and/or scans. Processing charge will still apply.
+              </p>
+              {% if blank_twins %}
+              <p style="font-size:14px; margin:0 0 8px 0;">
+                <strong>Blank Roll ID{{ 's' if blank_twins|length > 1 else '' }}:</strong> {{ blank_twins | join(', ') }}
+              </p>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
+          <!-- MAIN CONTENT -->
+          <tr>
+            <td style="padding: 0 20px 20px 20px; font-family: Arial, sans-serif; color: #333333;">
+              <img src="https://sitetech.com.au/digiPrint/edm/db_advice_r3.png" alt="Main image" width="560" style="max-width:560px; width:100%; height:auto; display:block; margin:20px auto; border:0;">
+
+              <h2 style="font-size:16px; margin:0 0 10px 0;">Click the link below to download your photos.</h2>
+              <p style="font-size:12px; margin:0 0 10px 0;"><em>Please note that your files could take up to 24 hours to upload completely.</em></p>
+
+              {% if drive_url %}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:auto;">
+                <tr>
+                  <td bgcolor="#ff6600" style="border-radius:4px;">
+                    <a href="{{ drive_url }}" style="display:inline-block; padding:10px 20px; font-family: Arial, sans-serif; font-size:14px; color:#ffffff; text-decoration:none;">
+                      Link to image files
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              {% endif %}
+
+              <p style="font-size:14px; line-height:1.5; margin:18px 0 20px 0;">
+                <strong>Important information about your image files.</strong><br>
+                Your image scans have been uploaded to Google Drive and will remain there for a maximum of 3 months.
+                <em>Please ensure you download your files within that time.</em><br><br>
+                Your physical negatives will be available in store for a maximum of 2 weeks from your invoice date.
+                We cannot guarantee your negatives will be available beyond this time.<br><br>
+                If you ordered prints with your develop and scan job these will be made available in-store, along with your negatives for up to 4 weeks.<br><br>
+                If you need us to hang onto your negatives and/or prints for a little bit longer, just drop us a line.
+              </p>
+
+              <p style="font-size:13px; color:#666; margin:16px 0 0 0;">
+                Order: <strong>{{ order_number }}</strong> · {{ store_name }}
+              </p>
+            </td>
+          </tr>
+
+          <!-- MORE TO EXPLORE -->
+          <tr>
+            <td style="padding: 20px;">
+              <h2 style="font-family: Arial, sans-serif; font-size:16px; text-align:center; margin-bottom:20px;">More To Explore</h2>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://1458.app.fujifilmimagine.com/products/digital-print/all-digital-prints-28905/12/1/none" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/1.onLine_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="Print Online">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://1458.app.fujifilmimagine.com/products/digital-print/all-digital-prints-28905/12/1/none" target="_blank" style="text-decoration:none; color:#000000;">Print Online</a>
+                    </div>
+                  </td>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://www.digidirect.com.au/photo-accessories/film-darkroom-and-video-tapes" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/2.film_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="Shop Film">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://www.digidirect.com.au/photo-accessories/film-darkroom-and-video-tapes" target="_blank" style="text-decoration:none; color:#000000;">Shop Film</a>
+                    </div>
+                  </td>
+                  <td class="stack" align="center" valign="top" width="33.33%" style="padding:10px;">
+                    <a href="https://www.photoking.com" target="_blank" style="text-decoration:none;">
+                      <img class="explore-img" src="https://sitetech.com.au/digiPrint/edm/3.pk_360.png" width="220" style="display:block; width:100%; max-width:240px; height:auto; margin:0 auto; border:0;" alt="ProPrint PhotoKing">
+                    </a>
+                    <div class="explore-title" style="font-family: Arial, sans-serif; font-size:15px; color:#000000; padding-top:8px; text-align:center;">
+                      <a href="https://www.photoking.com" target="_blank" style="text-decoration:none; color:#000000;">ProPrint PhotoKing</a>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-family: Arial, sans-serif; font-size:14px; text-align:center; margin-top:20px;">
+                Thank you for trusting digiDirect with your precious memories.
+              </p>
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="padding:20px; background-color:#f0f0f0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left" style="font-family: Arial, sans-serif; font-size:12px;">
+                    <a href="https://www.facebook.com/digiDirect/"><img src="https://sitetech.com.au/digiPrint/edm/facebook.png" height="30" alt="FB" style="margin-right:10px;"></a>
+                    <a href="https://www.tiktok.com/@digidirect"><img src="https://sitetech.com.au/digiPrint/edm/tik-tok.png" height="30" alt="TT" style="margin-right:10px;"></a>
+                    <a href="https://www.instagram.com/digidirect/"><img src="https://sitetech.com.au/digiPrint/edm/instagram.png" height="30" alt="IG"></a>
+                  </td>
+                  <td align="right">
+                    <a href="https://www.digidirect.com.au">
+                      <img src="https://sitetech.com.au/digiPrint/edm/digiDirect_mono_420.png" height="30" alt="digiDirect logo">
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+```
+
+---
+
+**File 3b — `prints_and_scans_ready.html`** (Dev+Scan+Print — same as scans_ready, heading changes)
+
+This is identical to `scans_ready.html` — just save a copy and change the heading line from:
+```
+Your image files are ready
+```
+to:
+```
+Your prints and scans are ready

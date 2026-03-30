@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.schemas import (
     OrderCreate, OrderRead, OrderSummary, OrderStatusUpdate,
-    OrderMarkBlank, OrderSetDriveLink
+    OrderMarkBlank, OrderSetDriveLink, RollsAddPayload
 )
 from app.models.orm import Order, Roll, Store
 from app.services.order_service import order_service
@@ -27,15 +27,12 @@ async def create_order(
     current_user: dict = Depends(get_current_user),
 ):
     """Book in a new film order (manual intake)."""
-    # If operator not provided, use logged-in user's initials
     if not payload.operator_initials:
         payload.operator_initials = current_user.get("initials", "")
     try:
         order = await order_service.create_order(db, payload, actor_label=_actor(current_user))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-
-    # Reload with relationships
     order = await order_service.get_order(db, order.id)
     return _enrich(order)
 
@@ -51,12 +48,39 @@ async def list_orders(
     current_user: dict = Depends(get_current_user),
 ):
     """List orders. Store staff are limited to their own store."""
-    # Enforce store restriction for non-master-admins
     if current_user.get("role") != "master_admin" and not store_id:
         store_id = UUID(current_user["store_id"]) if current_user.get("store_id") else None
 
     orders = await order_service.list_orders(db, store_id, status, search, limit, offset)
     return [_enrich(o) for o in orders]
+
+
+@router.get("/check/twin")
+async def check_twin(
+    store_id: UUID = Query(...),
+    twin_check: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Check if a twin check number already exists in this store."""
+    padded = twin_check.strip().zfill(4)
+    exists = await order_service.check_twin_exists(db, store_id, padded)
+    return {"exists": exists, "twin_check": padded}
+
+
+@router.get("/check/order-number")
+async def check_order_number(
+    order_number: str = Query(...),
+    store_id: UUID = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Check if an order number already exists at a store."""
+    existing = await order_service.get_order_by_number(db, order_number.strip(), store_id)
+    if not existing:
+        return {"exists": False}
+    existing = await order_service.get_order(db, existing.id)
+    return {"exists": True, "order": _enrich(existing)}
 
 
 @router.get("/{order_id}", response_model=OrderRead)
@@ -121,6 +145,49 @@ async def mark_blank(
     return _enrich(order)
 
 
+@router.post("/{order_id}/add-rolls", response_model=OrderRead)
+async def add_rolls_to_order(
+    order_id: UUID,
+    payload: RollsAddPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Add additional rolls to an existing order."""
+    order = await order_service.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    existing_twins = await order_service._get_existing_twins(db, order.store_id)
+    new_twins = [r.twin_check for r in payload.rolls]
+    dups = [t for t in new_twins if t in existing_twins]
+    if dups:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Twin check(s) already in use: {', '.join(dups)}"
+        )
+
+    for roll_payload in payload.rolls:
+        roll = Roll(
+            order_id=order.id,
+            store_id=order.store_id,
+            twin_check=roll_payload.twin_check,
+            service_type=roll_payload.service_type,
+            status="booked",
+        )
+        db.add(roll)
+
+    await order_service._log_event(
+        db, order.id,
+        event_type="rolls_added",
+        description=f"{len(payload.rolls)} roll(s) added to order",
+        actor_label=_actor(current_user),
+    )
+
+    await db.commit()
+    order = await order_service.get_order(db, order.id)
+    return _enrich(order)
+
+
 @router.get("/{order_id}/events")
 async def get_events(
     order_id: UUID,
@@ -148,22 +215,9 @@ async def get_events(
     ]
 
 
-@router.get("/check/twin")
-async def check_twin(
-    store_id: UUID = Query(...),
-    twin_check: str = Query(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """Check if a twin check number already exists in this store."""
-    padded = twin_check.strip().zfill(4)
-    exists = await order_service.check_twin_exists(db, store_id, padded)
-    return {"exists": exists, "twin_check": padded}
-
-
 def _enrich(order: Order) -> dict:
     """Add store_name to order dict for frontend convenience."""
-    d = {
+    return {
         "id": str(order.id),
         "order_number": order.order_number,
         "order_type": order.order_type,
@@ -201,4 +255,3 @@ def _enrich(order: Order) -> dict:
             for r in (order.rolls or [])
         ]
     }
-    return d

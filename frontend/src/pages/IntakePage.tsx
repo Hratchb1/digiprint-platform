@@ -1,458 +1,691 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ordersApi, storesApi } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import { FilmIcon, Check, AlertTriangle, Plus, X, ChevronRight, Loader2 } from 'lucide-react'
-import clsx from 'clsx'
+// src/pages/IntakePage.tsx
+import React, { useState, useRef, useCallback, useEffect } from "react";
+import { useProntoLookup } from "../hooks/useProntoLookup";
+import { ProntoOrderSummary } from "../components/ProntoOrderSummary";
+import { api } from "../lib/api";
 
-type Roll = { twin: string; service: string }
+const TERRITORY_STORE_MAP: Record<string, string> = {
+  BOND: "a90c273e-49ff-4733-b709-31066f2ec503",
+  BRIS: "514d0eee-b807-45bd-96bd-eda630be1fba",
+  CANN: "8a525dc4-c1c2-48a0-a315-c03082b63f3e",
+  MELB: "f2635a53-93ca-499f-aad4-4eb5e7f9128c",
+  MIRA: "ff8bdc2e-966b-4a49-80b2-af5030148095",
+  PARR: "87ed3978-0d69-4acd-89f5-8e60dd121165",
+};
 
-const SERVICES = ['Dev only', 'Dev+Scan', 'Dev+Scan+Print', 'Dev+Print', 'Scan only']
+const SERVICE_TYPE_MAP: Record<string, string> = {
+  "Develop only":           "Dev only",
+  "Develop + Scan":         "Dev+Scan",
+  "Develop + Scan + Print": "Dev+Scan+Print",
+  "Scan only":              "Scan only",
+  "Print only":             "Print only",
+};
 
-function beep(freq = 880, ms = 100) {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const o = ctx.createOscillator()
-    const g = ctx.createGain()
-    o.type = 'sine'
-    o.frequency.value = freq
-    o.connect(g)
-    g.connect(ctx.destination)
-    const t = ctx.currentTime
-    g.gain.setValueAtTime(0.0001, t)
-    g.gain.exponentialRampToValueAtTime(0.3, t + 0.01)
-    g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000)
-    o.start(t)
-    o.stop(t + ms / 1000)
-  } catch {}
+interface TwinEntry {
+  twin: string;
+  status: "ok" | "duplicate";
+  message?: string;
 }
 
-function pad4(s: string) {
-  const d = s.replace(/\D/g, '')
-  return d.padStart(4, '0')
+interface ExistingOrderInfo {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  status: string;
+  created_at: string;
+  operator: string;
+  rolls: { twin_check: string; service_type: string; status: string }[];
+}
+
+interface LastBooked {
+  orderNum: string;
+  customerName: string;
+  rollCount: number;
+  action: "new" | "added";
+}
+
+type IntakeStep = "operator" | "lookup" | "confirm" | "twins" | "done";
+type DupAction = "add" | "new" | null;
+
+// ── Validation ───────────────────────────────────────────────
+function validateSingleFieldInput(val: string): string | null {
+  const v = val.trim();
+  const rangeMatch = v.match(/^(\d+)-(\d+)$/);
+  if (rangeMatch) {
+    const f = rangeMatch[1]; const l = rangeMatch[2];
+    if (f.length !== 4) return "Range start must be exactly 4 digits (e.g. 0042-0051).";
+    if (l.length !== 4) return "Range end must be exactly 4 digits (e.g. 0042-0051).";
+    const a = parseInt(f, 10); const b = parseInt(l, 10);
+    if (b < a) return `Wrap-around not allowed (${f} → ${l}).`;
+    if (a === 0) return "Twin checks cannot start at 0000.";
+    if (b - a + 1 > 200) return `Range too large (${b - a + 1} rolls). Max 200.`;
+    return null;
+  }
+  if (!/^\d+$/.test(v)) return "Must be digits only.";
+  if (v.length !== 4) return "Twin check must be exactly 4 digits (e.g. 0042).";
+  if (parseInt(v, 10) === 0) return "Twin check cannot be 0000.";
+  return null;
+}
+
+function validateRangeInputs(first: string, last: string): string | null {
+  const f = first.trim(); const l = last.trim();
+  if (f.length !== 4 || !/^\d{4}$/.test(f)) return "First twin must be exactly 4 digits.";
+  if (l.length !== 4 || !/^\d{4}$/.test(l)) return "Last twin must be exactly 4 digits.";
+  const a = parseInt(f, 10); const b = parseInt(l, 10);
+  if (a === 0) return "Twin checks cannot start at 0000.";
+  if (b < a) return `Wrap-around not allowed (${f} → ${l}).`;
+  if (b - a + 1 > 200) return `Range too large (${b - a + 1} rolls). Max 200.`;
+  return null;
+}
+
+function parseSingleFieldInput(val: string): string[] {
+  const v = val.trim();
+  const rangeMatch = v.match(/^(\d{4})-(\d{4})$/);
+  if (rangeMatch) {
+    const a = parseInt(rangeMatch[1], 10); const b = parseInt(rangeMatch[2], 10);
+    const result: string[] = [];
+    for (let i = a; i <= b; i++) result.push(String(i).padStart(4, "0"));
+    return result;
+  }
+  return [v];
+}
+
+function buildRange(first: string, last: string): string[] {
+  const a = parseInt(first.trim(), 10); const b = parseInt(last.trim(), 10);
+  const result: string[] = [];
+  for (let i = a; i <= b; i++) result.push(String(i).padStart(4, "0"));
+  return result;
 }
 
 export default function IntakePage() {
-  const { user } = useAuth()
-  const qc = useQueryClient()
+  const { lookup, order, loading: lookupLoading, error: lookupError, clear } = useProntoLookup();
 
-  // Step 1: Order details
-  const [orderNumber, setOrderNumber] = useState('')
-  const [customerName, setCustomerName] = useState('')
-  const [customerEmail, setCustomerEmail] = useState('')
-  const [storeId, setStoreId] = useState(user?.store_id || '')
-  const [operator, setOperator] = useState(() => localStorage.getItem('pref_operator') || user?.initials || '')
-  const [defaultService, setDefaultService] = useState(() => localStorage.getItem('pref_service') || 'Dev+Scan')
-  const [locked, setLocked] = useState(false)
+  const [operatorInitials, setOperatorInitials] = useState<string>(
+    () => sessionStorage.getItem("operator_initials") || ""
+  );
+  const [operatorInput, setOperatorInput] = useState("");
+  const [operatorError, setOperatorError] = useState("");
+  const [step, setStep] = useState<IntakeStep>(operatorInitials ? "lookup" : "operator");
 
-  // Step 2: Rolls
-  const [rolls, setRolls] = useState<Roll[]>([])
-  const [twinInput, setTwinInput] = useState('')
-  const [twinError, setTwinError] = useState('')
-  const [rangeFirst, setRangeFirst] = useState('')
-  const [rangeLast, setRangeLast] = useState('')
+  const [orderInput, setOrderInput] = useState("");
+  const [serviceType, setServiceType] = useState("Develop + Scan");
+  const [twins, setTwins] = useState<TwinEntry[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Result
-  const [submitted, setSubmitted] = useState<any>(null)
+  // Last booked banner
+  const [lastBooked, setLastBooked] = useState<LastBooked | null>(null);
 
-  const twinRef = useRef<HTMLInputElement>(null)
-  const orderRef = useRef<HTMLInputElement>(null)
+  // Duplicate order state
+  const [existingOrder, setExistingOrder] = useState<ExistingOrderInfo | null>(null);
+  const [dupAction, setDupAction] = useState<DupAction>(null);
+  const [showDupModal, setShowDupModal] = useState(false);
+  const [checkingDup, setCheckingDup] = useState(false);
 
-  const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: storesApi.list })
+  // Twin entry
+  const [twinMode, setTwinMode] = useState<"single" | "range">("single");
+  const [singleInput, setSingleInput] = useState("");
+  const [singleError, setSingleError] = useState<string | null>(null);
+  const [firstTwin, setFirstTwin] = useState("");
+  const [lastTwin, setLastTwin] = useState("");
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
-  const { mutate: submit, isPending } = useMutation({
-    mutationFn: (payload: any) => ordersApi.create(payload),
-    onSuccess: (data) => {
-      beep(880, 150)
-      setSubmitted(data)
-      qc.invalidateQueries({ queryKey: ['orders-recent'] })
-    },
-    onError: (err: any) => {
-      beep(300, 200)
-      alert(err.response?.data?.detail || 'Failed to save order')
-    }
-  })
+  const operatorInputRef = useRef<HTMLInputElement>(null);
+  const orderInputRef    = useRef<HTMLInputElement>(null);
+  const singleTwinRef    = useRef<HTMLInputElement>(null);
+  const firstTwinRef     = useRef<HTMLInputElement>(null);
+  const lastTwinRef      = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (locked) twinRef.current?.focus()
-    else orderRef.current?.focus()
-  }, [locked])
+    if (step === "operator") setTimeout(() => operatorInputRef.current?.focus(), 50);
+    if (step === "lookup")   setTimeout(() => orderInputRef.current?.focus(), 50);
+    if (step === "twins")    setTimeout(() => {
+      if (twinMode === "single") singleTwinRef.current?.focus();
+      else firstTwinRef.current?.focus();
+    }, 100);
+  }, [step, twinMode]);
 
-  const lockOrder = () => {
-    if (!orderNumber.trim() || !customerName.trim()) {
-      beep(300, 150)
-      return
+  useEffect(() => {
+    if (order && step === "lookup") {
+      setServiceType(order.inferred_service_type);
+      setStep("confirm");
     }
-    localStorage.setItem('pref_operator', operator)
-    localStorage.setItem('pref_service', defaultService)
-    setLocked(true)
-    beep(600, 100)
-  }
+  }, [order]);
 
-  const addTwin = () => {
-    const raw = twinInput.trim()
-    setTwinError('')
-    if (!raw) return
+  // ── Operator ─────────────────────────────────────────────
+  const handleOperatorSubmit = () => {
+    const val = operatorInput.trim().toUpperCase();
+    if (!val) { setOperatorError("Please enter your initials."); return; }
+    if (val.length > 5) { setOperatorError("Initials too long (max 5 characters)."); return; }
+    sessionStorage.setItem("operator_initials", val);
+    setOperatorInitials(val);
+    setStep("lookup");
+  };
 
-    // Multi-scan: space or comma separated
-    const parts = raw.split(/[\s,]+/).filter(Boolean)
-    const toAdd: Roll[] = []
-    const dups: string[] = []
+  // ── Order lookup with duplicate check ────────────────────
+  const handleOrderLookup = useCallback(async () => {
+    if (!orderInput.trim() || !order) return;
 
-    for (const p of parts) {
-      if (!/^\d{1,4}$/.test(p)) {
-        setTwinError(`"${p}" is not a valid twin (1–4 digits)`)
-        beep(300, 150)
-        return
-      }
-      const padded = pad4(p)
-      if (rolls.find(r => r.twin === padded)) {
-        dups.push(padded)
+    const storeId = TERRITORY_STORE_MAP[order.territory];
+    if (!storeId) return;
+
+    setCheckingDup(true);
+    try {
+      const { data } = await api.get("/orders/check/order-number", {
+        params: { order_number: orderInput.trim(), store_id: storeId }
+      });
+      if (data.exists) {
+        setExistingOrder(data.order);
+        setShowDupModal(true);
       } else {
-        toAdd.push({ twin: padded, service: defaultService })
+        setStep("twins");
+      }
+    } catch {
+      // If check fails, proceed normally
+      setStep("twins");
+    } finally {
+      setCheckingDup(false);
+    }
+  }, [orderInput, order]);
+
+  // When Pronto lookup completes, then check for duplicates
+  const handleInitialLookup = useCallback(async () => {
+    if (!orderInput.trim()) return;
+    await lookup(orderInput.trim());
+  }, [orderInput, lookup]);
+
+  // After order loads, check for duplicates then go to confirm
+  useEffect(() => {
+    if (order && step === "lookup") {
+      setServiceType(order.inferred_service_type);
+      // Check for duplicate order at store level
+      const storeId = TERRITORY_STORE_MAP[order.territory];
+      if (storeId) {
+        api.get("/orders/check/order-number", {
+          params: { order_number: order.sales_order_number, store_id: storeId }
+        }).then(({ data }) => {
+          if (data.exists) {
+            setExistingOrder(data.order);
+            setShowDupModal(true);
+            setStep("confirm");
+          } else {
+            setStep("confirm");
+          }
+        }).catch(() => setStep("confirm"));
+      } else {
+        setStep("confirm");
       }
     }
+  }, [order]);
 
-    if (dups.length && !window.confirm(`Twin(s) already in list: ${dups.join(', ')}\nAdd anyway?`)) return
-    if (toAdd.length) {
-      setRolls(prev => [...prev, ...toAdd])
-      beep(880, 80)
+  const handleDupChoice = (action: "add" | "new" | "cancel") => {
+    setShowDupModal(false);
+    if (action === "cancel") {
+      handleClear();
+      return;
     }
-    setTwinInput('')
-  }
+    setDupAction(action);
+    setStep("twins");
+  };
 
-  const addRange = () => {
-    const a = parseInt(rangeFirst, 10)
-    const b = parseInt(rangeLast, 10)
-    if (isNaN(a) || isNaN(b)) return
-    const lo = Math.min(a, b)
-    const hi = Math.max(a, b)
-    if (hi - lo > 199) { alert('Range too large (max 200)'); return }
-    const toAdd: Roll[] = []
-    for (let i = lo; i <= hi; i++) {
-      const padded = pad4(String(i))
-      if (!rolls.find(r => r.twin === padded)) {
-        toAdd.push({ twin: padded, service: defaultService })
+  const handleClear = () => {
+    clear();
+    setOrderInput("");
+    setTwins([]);
+    setSingleInput("");
+    setSingleError(null);
+    setFirstTwin("");
+    setLastTwin("");
+    setRangeError(null);
+    setSaveError(null);
+    setServiceType("Develop + Scan");
+    setExistingOrder(null);
+    setDupAction(null);
+    setShowDupModal(false);
+    setStep("lookup");
+  };
+
+  // ── Add twins ─────────────────────────────────────────────
+  const addTwins = useCallback(async (twinList: string[]) => {
+    const existingInSession = new Set(twins.map((t) => t.twin));
+    const sessionDups = twinList.filter((t) => existingInSession.has(t));
+    if (sessionDups.length > 0) {
+      const msg = `Already added this session: ${sessionDups.join(", ")}`;
+      if (twinMode === "single") setSingleError(msg);
+      else setRangeError(msg);
+      return;
+    }
+
+    let storeDups: string[] = [];
+    try {
+      const storeId = order?.territory ? TERRITORY_STORE_MAP[order.territory] : undefined;
+      const { data } = await api.post("/rolls/check-twins", { twins: twinList, store_id: storeId });
+      storeDups = data.duplicates || [];
+    } catch { /* endpoint not built yet */ }
+
+    const entries: TwinEntry[] = twinList.map((twin) => ({
+      twin,
+      status: storeDups.includes(twin) ? "duplicate" : "ok",
+      message: storeDups.includes(twin) ? "Already in use at this store" : undefined,
+    }));
+    setTwins((prev) => [...prev, ...entries]);
+  }, [twins, order, twinMode]);
+
+  const handleSingleSubmit = useCallback(async () => {
+    const raw = singleInput.trim();
+    if (!raw && twins.length > 0) { handleSave(); return; }
+    if (!raw) return;
+    setSingleError(null);
+    const err = validateSingleFieldInput(raw);
+    if (err) { setSingleError(err); return; }
+    await addTwins(parseSingleFieldInput(raw));
+    setSingleInput("");
+    singleTwinRef.current?.focus();
+  }, [singleInput, twins, addTwins]);
+
+  const handleRangeSubmit = useCallback(async () => {
+    setRangeError(null);
+    const err = validateRangeInputs(firstTwin, lastTwin);
+    if (err) { setRangeError(err); return; }
+    await addTwins(buildRange(firstTwin, lastTwin));
+    setFirstTwin("");
+    setLastTwin("");
+    firstTwinRef.current?.focus();
+  }, [firstTwin, lastTwin, addTwins]);
+
+  // ── Save order ────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!order) return;
+    const validTwins = twins.filter((t) => t.status === "ok");
+    if (validTwins.length === 0) { setSaveError("No valid twin checks to save."); return; }
+
+    const storeId = TERRITORY_STORE_MAP[order.territory];
+    if (!storeId) { setSaveError(`Unknown store territory: ${order.territory}`); return; }
+
+    const backendServiceType = SERVICE_TYPE_MAP[serviceType] || serviceType;
+    const rollsPayload = validTwins.map((t) => ({ twin_check: t.twin, service_type: backendServiceType }));
+
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      if (dupAction === "add" && existingOrder) {
+        // Add rolls to existing order
+        await api.post(`/orders/${existingOrder.id}/add-rolls`, {
+          rolls: rollsPayload,
+          operator_initials: operatorInitials || null,
+        });
+        setLastBooked({
+          orderNum: order.sales_order_number,
+          customerName: order.customer_name,
+          rollCount: validTwins.length,
+          action: "added",
+        });
+      } else {
+        // New order — with suffix if "new booking" on duplicate
+        const orderNumber = dupAction === "new"
+          ? `${order.sales_order_number}-B`
+          : order.sales_order_number;
+
+        await api.post("/orders", {
+          order_number:      orderNumber,
+          store_id:          storeId,
+          customer_name:     order.customer_name,
+          customer_email:    order.email_address || null,
+          account:           order.pronto_account || null,
+          operator_initials: operatorInitials || null,
+          rolls:             rollsPayload,
+        });
+        setLastBooked({
+          orderNum: orderNumber,
+          customerName: order.customer_name,
+          rollCount: validTwins.length,
+          action: "new",
+        });
       }
+      setStep("done");
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      setSaveError(typeof detail === "string" ? detail : JSON.stringify(detail) || "Failed to save order.");
+    } finally {
+      setSaving(false);
     }
-    setRolls(prev => [...prev, ...toAdd])
-    beep(880, 100)
-    setRangeFirst('')
-    setRangeLast('')
-  }
+  }, [order, twins, serviceType, operatorInitials, dupAction, existingOrder]);
 
-  const removeRoll = (twin: string) => setRolls(prev => prev.filter(r => r.twin !== twin))
+  const removeTwin = (twin: string) => setTwins((prev) => prev.filter((t) => t.twin !== twin));
 
-  const handleTwinKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') addTwin()
-    if (e.key === 'Escape') resetForm()
-  }
+  const validTwinCount = twins.filter((t) => t.status === "ok").length;
+  const dupTwinCount   = twins.filter((t) => t.status === "duplicate").length;
+  const rangePreviewCount =
+    firstTwin.length === 4 && lastTwin.length === 4 &&
+    /^\d{4}$/.test(firstTwin) && /^\d{4}$/.test(lastTwin) &&
+    parseInt(lastTwin) >= parseInt(firstTwin)
+      ? parseInt(lastTwin) - parseInt(firstTwin) + 1
+      : null;
 
-  const handleRangeLastKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') addRange()
-  }
-
-  const submitOrder = () => {
-    if (!rolls.length) { alert('Add at least one roll'); return }
-    submit({
-      order_number: orderNumber.trim().replace(/\s/g, ''),
-      store_id: storeId,
-      customer_name: customerName.trim(),
-      customer_email: customerEmail.trim() || undefined,
-      operator_initials: operator.trim(),
-      rolls: rolls.map(r => ({ twin_check: r.twin, service_type: r.service })),
-    })
-  }
-
-  const resetForm = () => {
-    setOrderNumber('')
-    setCustomerName('')
-    setCustomerEmail('')
-    setRolls([])
-    setTwinInput('')
-    setTwinError('')
-    setRangeFirst('')
-    setRangeLast('')
-    setLocked(false)
-    setSubmitted(null)
-    setTimeout(() => orderRef.current?.focus(), 50)
-  }
-
-  // ── Success screen ─────────────────────────────────────────────────────
-  if (submitted) {
+  // ── Operator prompt ───────────────────────────────────────
+  if (step === "operator") {
     return (
-      <div className="p-6 lg:p-8 max-w-2xl mx-auto">
-        <div className="bg-[#111] border border-green-500/20 rounded-2xl p-8 text-center">
-          <div className="w-16 h-16 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center mx-auto mb-4">
-            <Check size={28} className="text-green-400" />
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-sm space-y-6">
+          <div>
+            <h1 className="text-2xl font-bold text-white">Film Intake</h1>
+            <p className="text-gray-400 mt-1 text-sm">Enter your initials to start your session</p>
           </div>
-          <h2 className="text-white font-bold text-xl mb-2">Order Booked In</h2>
-          <p className="text-[#555] text-sm mb-6">
-            {submitted.customer_name} · {submitted.order_number}
-          </p>
-          <div className="flex flex-wrap justify-center gap-2 mb-6">
-            {submitted.rolls?.map((r: any) => (
-              <span key={r.twin_check} className="px-3 py-1 rounded-full bg-[#1a1a1a] border border-[#2a2a2a] text-[#aaa] text-sm font-mono">
-                {r.twin_check}
-              </span>
-            ))}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-300">Your initials</label>
+            <input
+              ref={operatorInputRef}
+              type="text"
+              value={operatorInput}
+              onChange={(e) => { setOperatorInput(e.target.value.toUpperCase()); setOperatorError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && handleOperatorSubmit()}
+              placeholder="e.g. HB"
+              maxLength={5}
+              className="w-full rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono tracking-widest uppercase"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+            {operatorError && <p className="text-sm text-red-400">{operatorError}</p>}
           </div>
-          <button
-            onClick={resetForm}
-            className="bg-[#ff6600] hover:bg-[#ff7720] text-white font-semibold px-6 py-3 rounded-lg transition-colors"
-          >
-            Book next order
+          <button onClick={handleOperatorSubmit} className="w-full py-3 rounded-lg font-semibold text-white" style={{ backgroundColor: "#f97316" }}>
+            Start intake
           </button>
         </div>
       </div>
-    )
+    );
   }
 
+  // ── Done ──────────────────────────────────────────────────
+  if (step === "done") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-md text-center space-y-6">
+          <div className="w-16 h-16 rounded-full bg-green-500 flex items-center justify-center mx-auto">
+            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">
+              {lastBooked?.action === "added" ? "Rolls added" : "Order booked"}
+            </h2>
+            <p className="text-gray-400 mt-1">
+              {lastBooked?.customerName} — {lastBooked?.rollCount} roll{lastBooked?.rollCount !== 1 ? "s" : ""} checked in
+            </p>
+            <p className="text-gray-500 text-sm mt-1">#{lastBooked?.orderNum}</p>
+            <p className="text-gray-600 text-xs mt-1">Operator: {operatorInitials}</p>
+          </div>
+          <button
+            onClick={() => {
+              clear();
+              setOrderInput("");
+              setTwins([]);
+              setSingleInput("");
+              setFirstTwin("");
+              setLastTwin("");
+              setSingleError(null);
+              setRangeError(null);
+              setSaveError(null);
+              setServiceType("Develop + Scan");
+              setExistingOrder(null);
+              setDupAction(null);
+              setStep("lookup");
+            }}
+            className="w-full py-3 px-6 rounded-lg font-semibold text-white"
+            style={{ backgroundColor: "#f97316" }}
+          >
+            Next order
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Main intake ───────────────────────────────────────────
   return (
-    <div className="p-6 lg:p-8 max-w-2xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-white text-2xl font-bold tracking-tight">Film Intake</h1>
-        <p className="text-[#555] text-sm mt-1">Book in film rolls for processing</p>
+    <div className="max-w-lg mx-auto px-4 py-8 space-y-6">
+
+      {/* Last booked banner */}
+      {lastBooked && (
+        <div className="rounded-lg px-4 py-3 flex items-center justify-between" style={{ backgroundColor: "#064e3b" }}>
+          <div>
+            <p className="text-xs text-green-400 uppercase tracking-wide">Last booked</p>
+            <p className="text-sm text-white font-medium">
+              #{lastBooked.orderNum} — {lastBooked.customerName}
+            </p>
+            <p className="text-xs text-green-400">
+              {lastBooked.rollCount} roll{lastBooked.rollCount !== 1 ? "s" : ""} · {lastBooked.action === "added" ? "Added to existing" : "New order"}
+            </p>
+          </div>
+          <button onClick={() => setLastBooked(null)} className="text-green-600 hover:text-green-400 text-lg">×</button>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Film Intake</h1>
+        <span className="text-sm text-gray-500">
+          Operator: <span className="text-gray-300 font-mono">{operatorInitials}</span>
+        </span>
       </div>
 
-      <div className="bg-[#111] border border-[#1e1e1e] rounded-2xl overflow-hidden">
-        {/* Header bar */}
-        <div className="px-6 py-4 border-b border-[#1e1e1e] flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#ff6600]/10 border border-[#ff6600]/20 flex items-center justify-center">
-            <FilmIcon size={16} className="text-[#ff6600]" />
-          </div>
-          <div className="flex-1">
-            <p className="text-white font-medium text-sm">
-              {locked ? `Order: ${orderNumber}` : 'New Order'}
-            </p>
-            {locked && <p className="text-[#555] text-xs">{customerName}</p>}
-          </div>
-          {locked && (
-            <span className="px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 text-xs">
-              Locked
-            </span>
-          )}
-        </div>
-
-        <div className="p-6 space-y-5">
-
-          {/* ── Step 1: Order details ── */}
-          <div className={clsx('space-y-4', locked && 'opacity-40 pointer-events-none')}>
-            <p className="text-[#666] text-xs uppercase tracking-widest font-medium">Order Details</p>
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* Store */}
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-[#666] text-xs mb-1.5">Store</label>
-                <select
-                  value={storeId}
-                  onChange={e => setStoreId(e.target.value)}
-                  disabled={locked || user?.role === 'staff'}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600]"
-                >
-                  <option value="">Select store…</option>
-                  {stores.map((s: any) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Operator */}
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-[#666] text-xs mb-1.5">Operator</label>
-                <input
-                  value={operator}
-                  onChange={e => setOperator(e.target.value)}
-                  placeholder="Initials"
-                  disabled={locked}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333]"
-                />
-              </div>
-
-              {/* Order number */}
-              <div className="col-span-2">
-                <label className="block text-[#666] text-xs mb-1.5">Order Number</label>
-                <input
-                  ref={orderRef}
-                  value={orderNumber}
-                  onChange={e => setOrderNumber(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && lockOrder()}
-                  placeholder="e.g. DD-2025-000123"
-                  disabled={locked}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333] font-mono"
-                />
-              </div>
-
-              {/* Customer name */}
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-[#666] text-xs mb-1.5">Customer Name</label>
-                <input
-                  value={customerName}
-                  onChange={e => setCustomerName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && lockOrder()}
-                  placeholder="First Last"
-                  disabled={locked}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333]"
-                />
-              </div>
-
-              {/* Customer email */}
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-[#666] text-xs mb-1.5">
-                  Email <span className="text-[#444]">(optional)</span>
-                </label>
-                <input
-                  value={customerEmail}
-                  onChange={e => setCustomerEmail(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && lockOrder()}
-                  placeholder="name@example.com"
-                  type="email"
-                  disabled={locked}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333]"
-                />
-              </div>
-
-              {/* Default service */}
-              <div className="col-span-2">
-                <label className="block text-[#666] text-xs mb-1.5">Default Service</label>
-                <select
-                  value={defaultService}
-                  onChange={e => setDefaultService(e.target.value)}
-                  disabled={locked}
-                  className="w-full bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600]"
-                >
-                  {SERVICES.map(s => <option key={s}>{s}</option>)}
-                </select>
-              </div>
+      {/* Duplicate order modal */}
+      {showDupModal && existingOrder && (
+        <div className="rounded-xl border border-amber-700 p-5 space-y-4" style={{ backgroundColor: "#1c1a0f" }}>
+          <div className="flex items-start gap-3">
+            <span className="text-amber-400 text-xl">⚠</span>
+            <div>
+              <p className="text-amber-400 font-semibold">Order already exists</p>
+              <p className="text-sm text-gray-300 mt-1">
+                <span className="font-medium text-white">{existingOrder.customer_name}</span> — booked {new Date(existingOrder.created_at).toLocaleString("en-AU", { dateStyle: "short", timeStyle: "short" })}
+                {existingOrder.operator ? ` by ${existingOrder.operator}` : ""}
+              </p>
+              <p className="text-sm text-gray-400 mt-0.5">
+                {existingOrder.rolls?.length || 0} roll{existingOrder.rolls?.length !== 1 ? "s" : ""} — Status: {existingOrder.status}
+              </p>
             </div>
+          </div>
+          <p className="text-sm text-gray-300 font-medium">What do you want to do?</p>
+          <div className="space-y-2">
+            <button
+              onClick={() => handleDupChoice("add")}
+              className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left"
+              style={{ backgroundColor: "#374151" }}
+            >
+              ➕ Add more rolls — attach new twins to this order
+            </button>
+            <button
+              onClick={() => handleDupChoice("new")}
+              className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left"
+              style={{ backgroundColor: "#374151" }}
+            >
+              📋 New booking — create separate booking as {order?.sales_order_number}-B
+            </button>
+            <button
+              onClick={() => handleDupChoice("cancel")}
+              className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-400 text-left border border-gray-700"
+              style={{ backgroundColor: "#111827" }}
+            >
+              ✕ Cancel — go back
+            </button>
+          </div>
+        </div>
+      )}
 
-            {!locked && (
+      {/* Order number */}
+      {!showDupModal && (
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-300">Pronto order number</label>
+          <div className="flex gap-2">
+            <input
+              ref={orderInputRef}
+              type="text"
+              value={orderInput}
+              onChange={(e) => setOrderInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleInitialLookup()}
+              placeholder="Scan or type order number"
+              disabled={step !== "lookup"}
+              className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+            {step === "lookup" && (
               <button
-                onClick={lockOrder}
-                disabled={!orderNumber || !customerName || !storeId}
-                className="w-full bg-[#ff6600] hover:bg-[#ff7720] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
+                onClick={handleInitialLookup}
+                disabled={lookupLoading || !orderInput.trim()}
+                className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
+                style={{ backgroundColor: "#f97316" }}
               >
-                Lock Order & Start Scanning
+                {lookupLoading ? "Looking up..." : "Look up"}
+              </button>
+            )}
+            {step !== "lookup" && (
+              <button
+                onClick={handleClear}
+                className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-gray-600"
+                style={{ backgroundColor: "#1f2937" }}
+              >
+                Change
               </button>
             )}
           </div>
+          {lookupError && <p className="text-sm text-red-400">{lookupError}</p>}
+        </div>
+      )}
 
-          {/* ── Step 2: Scan twins ── */}
-          {locked && (
-            <div className="space-y-4 pt-2 border-t border-[#1e1e1e]">
-              <p className="text-[#666] text-xs uppercase tracking-widest font-medium">Scan Rolls</p>
+      {/* Order summary */}
+      {order && (step === "confirm" || step === "twins") && !showDupModal && (
+        <ProntoOrderSummary
+          order={order}
+          serviceType={serviceType}
+          onServiceTypeChange={setServiceType}
+          onConfirm={() => setStep("twins")}
+          onClear={handleClear}
+          dupAction={dupAction}
+          existingOrderRollCount={existingOrder?.rolls?.length}
+        />
+      )}
 
-              {/* Single twin input */}
-              <div>
-                <label className="block text-[#666] text-xs mb-1.5">
-                  Twin Check
-                  <span className="text-[#444] ml-1.5 normal-case tracking-normal">— scan or type, Enter to add</span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    ref={twinRef}
-                    value={twinInput}
-                    onChange={e => { setTwinInput(e.target.value); setTwinError('') }}
-                    onKeyDown={handleTwinKey}
-                    placeholder="Scan 1–4 digits…"
-                    className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333] font-mono"
-                  />
-                  <button
-                    onClick={addTwin}
-                    className="px-4 py-2.5 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#ff6600] text-[#888] hover:text-white rounded-lg transition-all text-sm"
-                  >
-                    <Plus size={16} />
-                  </button>
-                </div>
-                {twinError && (
-                  <p className="text-[#ff4444] text-xs mt-1.5 flex items-center gap-1">
-                    <AlertTriangle size={11} /> {twinError}
-                  </p>
-                )}
+      {/* Twin entry */}
+      {step === "twins" && !showDupModal && (
+        <div className="space-y-4">
+          <div className="flex rounded-lg overflow-hidden border border-gray-600">
+            <button
+              onClick={() => { setTwinMode("single"); setSingleError(null); }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "single" ? "text-white" : "text-gray-400"}`}
+              style={{ backgroundColor: twinMode === "single" ? "#374151" : "#1f2937" }}
+            >
+              Twin checks
+            </button>
+            <button
+              onClick={() => { setTwinMode("range"); setRangeError(null); }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "range" ? "text-white" : "text-gray-400"}`}
+              style={{ backgroundColor: twinMode === "range" ? "#374151" : "#1f2937" }}
+            >
+              Range
+            </button>
+          </div>
+
+          {twinMode === "single" && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-300">
+                Twin check
+                <span className="ml-2 text-gray-500 font-normal text-xs">4 digits (e.g. 0042) or dash range (e.g. 0042-0051)</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  ref={singleTwinRef}
+                  type="text"
+                  value={singleInput}
+                  onChange={(e) => { setSingleInput(e.target.value); setSingleError(null); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleSingleSubmit()}
+                  placeholder="e.g. 0042 or 0042-0051"
+                  maxLength={9}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+                  style={{ backgroundColor: "#1f2937" }}
+                />
+                <button onClick={handleSingleSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40" style={{ backgroundColor: "#374151" }}>Add</button>
               </div>
-
-              {/* Range input */}
-              <div>
-                <label className="block text-[#666] text-xs mb-1.5">Add Range</label>
-                <div className="flex gap-2">
-                  <input
-                    value={rangeFirst}
-                    onChange={e => setRangeFirst(e.target.value)}
-                    placeholder="First"
-                    className="w-24 bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333] font-mono"
-                  />
-                  <span className="text-[#444] text-sm self-center">→</span>
-                  <input
-                    value={rangeLast}
-                    onChange={e => setRangeLast(e.target.value)}
-                    onKeyDown={handleRangeLastKey}
-                    placeholder="Last"
-                    className="w-24 bg-[#0f0f0f] border border-[#2a2a2a] text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#ff6600] placeholder:text-[#333] font-mono"
-                  />
-                  <button
-                    onClick={addRange}
-                    disabled={!rangeFirst || !rangeLast}
-                    className="flex-1 px-4 py-2.5 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#ff6600] disabled:opacity-40 text-[#888] hover:text-white rounded-lg transition-all text-sm"
-                  >
-                    Add Range
-                  </button>
-                </div>
-              </div>
-
-              {/* Roll list */}
-              {rolls.length > 0 && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-[#666] text-xs">
-                      {rolls.length} roll{rolls.length !== 1 ? 's' : ''} scanned
-                    </p>
-                    <button onClick={() => setRolls([])} className="text-[#444] hover:text-[#ff4444] text-xs transition-colors">
-                      Clear all
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2 max-h-40 overflow-auto p-3 bg-[#0f0f0f] rounded-lg border border-[#1e1e1e]">
-                    {rolls.map(r => (
-                      <span
-                        key={r.twin}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1a1a1a] border border-[#2a2a2a] text-[#aaa] text-sm font-mono group"
-                      >
-                        {r.twin}
-                        <button
-                          onClick={() => removeRoll(r.twin)}
-                          className="text-[#333] hover:text-[#ff4444] transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                </div>
+              {singleError && <p className="text-sm text-red-400">{singleError}</p>}
+              {twins.length > 0 && !singleInput && (
+                <p className="text-xs text-gray-500">Press Enter on empty field to book {validTwinCount} roll{validTwinCount !== 1 ? "s" : ""}</p>
               )}
+            </div>
+          )}
 
-              {/* Action buttons */}
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={resetForm}
-                  className="px-4 py-2.5 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#444] text-[#666] hover:text-white rounded-lg transition-all text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={submitOrder}
-                  disabled={isPending || rolls.length === 0}
-                  className="flex-1 flex items-center justify-center gap-2 bg-[#ff6600] hover:bg-[#ff7720] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
-                >
-                  {isPending ? (
-                    <><Loader2 size={15} className="animate-spin" /> Saving…</>
-                  ) : (
-                    <>Save {rolls.length > 0 ? `${rolls.length} roll${rolls.length !== 1 ? 's' : ''}` : 'Order'} <ChevronRight size={15} /></>
-                  )}
-                </button>
+          {twinMode === "range" && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-300">
+                Twin check range
+                <span className="ml-2 text-gray-500 font-normal text-xs">Both must be exactly 4 digits</span>
+              </label>
+              <div className="flex gap-2 items-center">
+                <input
+                  ref={firstTwinRef}
+                  type="text"
+                  value={firstTwin}
+                  onChange={(e) => { setFirstTwin(e.target.value); setRangeError(null); }}
+                  onKeyDown={(e) => e.key === "Enter" && lastTwinRef.current?.focus()}
+                  placeholder="First (e.g. 0042)"
+                  maxLength={4}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+                  style={{ backgroundColor: "#1f2937" }}
+                />
+                <span className="text-gray-500 text-sm px-1">→</span>
+                <input
+                  ref={lastTwinRef}
+                  type="text"
+                  value={lastTwin}
+                  onChange={(e) => { setLastTwin(e.target.value); setRangeError(null); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleRangeSubmit()}
+                  placeholder="Last (e.g. 0051)"
+                  maxLength={4}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+                  style={{ backgroundColor: "#1f2937" }}
+                />
+                <button onClick={handleRangeSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40 whitespace-nowrap" style={{ backgroundColor: "#374151" }}>Add range</button>
+              </div>
+              {rangeError && <p className="text-sm text-red-400">{rangeError}</p>}
+              {rangePreviewCount && !rangeError && (
+                <p className="text-xs text-gray-500">{rangePreviewCount} rolls in range</p>
+              )}
+            </div>
+          )}
+
+          {twins.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">{validTwinCount} valid</p>
+                {dupTwinCount > 0 && <p className="text-xs text-red-400 uppercase tracking-wide">{dupTwinCount} duplicate{dupTwinCount !== 1 ? "s" : ""}</p>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {twins.map((entry) => (
+                  <div
+                    key={entry.twin}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-mono font-medium ${entry.status === "ok" ? "bg-gray-700 text-white" : "bg-red-900 text-red-300 border border-red-700"}`}
+                  >
+                    {entry.twin}
+                    {entry.status === "duplicate" && <span className="text-xs text-red-400">dup</span>}
+                    <button onClick={() => removeTwin(entry.twin)} className="text-gray-400 hover:text-white ml-0.5">×</button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
+
+          {twins.length > 0 && (
+            <div className="pt-2 space-y-2">
+              {saveError && <p className="text-sm text-red-400">{saveError}</p>}
+              <button
+                onClick={handleSave}
+                disabled={saving || validTwinCount === 0}
+                className="w-full py-3 rounded-lg font-semibold text-white disabled:opacity-40"
+                style={{ backgroundColor: "#f97316" }}
+              >
+                {saving ? "Saving..." : `${dupAction === "add" ? "Add" : "Book"} ${validTwinCount} roll${validTwinCount !== 1 ? "s" : ""}`}
+              </button>
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
-  )
+  );
 }
