@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ordersApi } from '../lib/api'
 import { useState } from 'react'
-import { ArrowLeft, FilmIcon, ExternalLink, Check, AlertTriangle, Clock, ChevronDown } from 'lucide-react'
+import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 
@@ -36,6 +36,9 @@ export default function OrderDetailPage() {
     queryKey: ['order', id],
     queryFn: () => ordersApi.get(id!),
     enabled: !!id,
+    // Poll every 10s if border processing is in progress
+    refetchInterval: (data: any) =>
+      data?.border_scan_status === 'processing' ? 10000 : false,
   })
 
   const { data: events = [] } = useQuery({
@@ -65,6 +68,14 @@ export default function OrderDetailPage() {
     onSuccess: () => { setSelectedRolls(new Set()); invalidate() },
   })
 
+  const retryBorderMutation = useMutation({
+    mutationFn: () => fetch(`/api/orders/${id}/retry-border`, { method: 'POST' }).then(r => {
+      if (!r.ok) throw new Error('Retry failed')
+      return r.json()
+    }),
+    onSuccess: invalidate,
+  })
+
   if (isLoading) return (
     <div className="p-8 text-[#444] text-sm">Loading…</div>
   )
@@ -77,6 +88,10 @@ export default function OrderDetailPage() {
   const turnaround = order.date_delivered && order.created_at
     ? ((new Date(order.date_delivered).getTime() - new Date(order.created_at).getTime()) / 3600000).toFixed(1)
     : null
+
+  // Border scan state helpers
+  const borderStatus = order.border_scan_status as string | null
+  const hasBorderScan = order.border_scan === true
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
@@ -192,6 +207,74 @@ export default function OrderDetailPage() {
               </div>
             )}
           </div>
+
+          {/* ── Border Scan Card ── */}
+          {hasBorderScan && (
+            <div className={clsx(
+              'border rounded-xl p-5',
+              borderStatus === 'failed'
+                ? 'bg-red-500/5 border-red-500/20'
+                : borderStatus === 'complete'
+                ? 'bg-[#111] border-green-500/20'
+                : 'bg-[#111] border-[#1e1e1e]'
+            )}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  {borderStatus === 'complete' && <CheckCircle size={15} className="text-green-400" />}
+                  {borderStatus === 'failed'   && <XCircle size={15} className="text-red-400" />}
+                  {borderStatus === 'processing' && <Loader2 size={15} className="text-blue-400 animate-spin" />}
+                  {!borderStatus && <RefreshCw size={15} className="text-[#555]" />}
+                  <p className="text-white text-sm font-medium">Border Scans</p>
+                </div>
+
+                <span className={clsx(
+                  'px-2.5 py-0.5 rounded-full text-[11px] font-medium border',
+                  borderStatus === 'complete'   && 'bg-green-500/10 text-green-400 border-green-500/20',
+                  borderStatus === 'processing' && 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+                  borderStatus === 'failed'     && 'bg-red-500/10 text-red-400 border-red-500/20',
+                  !borderStatus                 && 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]',
+                )}>
+                  {borderStatus ?? 'pending'}
+                </span>
+              </div>
+
+              {/* Processing message */}
+              {borderStatus === 'processing' && (
+                <p className="text-[#555] text-xs mb-3">
+                  Applying film borders to your scans — this usually takes 1–3 minutes.
+                </p>
+              )}
+
+              {/* Complete — show Drive link */}
+              {borderStatus === 'complete' && order.bordered_scans_drive_url && (
+                <a
+                  href={order.bordered_scans_drive_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-[#ff6600] hover:text-[#ff8833] text-sm transition-colors"
+                >
+                  <ExternalLink size={14} /> Open Bordered Scans folder
+                </a>
+              )}
+
+              {/* Failed — show error + retry */}
+              {borderStatus === 'failed' && (
+                <div className="flex items-center justify-between">
+                  <p className="text-red-400 text-xs">
+                    Border processing failed. Check the activity log for details.
+                  </p>
+                  <button
+                    onClick={() => retryBorderMutation.mutate()}
+                    disabled={retryBorderMutation.isPending}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#ff6600]/50 text-[#888] hover:text-white rounded-lg text-xs transition-all disabled:opacity-40"
+                  >
+                    <RefreshCw size={12} className={retryBorderMutation.isPending ? 'animate-spin' : ''} />
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Rolls */}
           <div className="bg-[#111] border border-[#1e1e1e] rounded-xl overflow-hidden">

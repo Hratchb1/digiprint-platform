@@ -144,6 +144,10 @@ async def send_order_email(
     Send the appropriate customer email for a completed order.
     Called automatically by the drive watcher when all rolls are scanned.
     Returns True if sent successfully.
+
+    If the order has border_scan enabled, the bordered_scans_drive_url will
+    be None at this point (processing runs async after email). The template
+    receives bordered_scans_url=None and gracefully omits the bordered link.
     """
     to_email = order.get("customer_email")
     if not to_email:
@@ -154,6 +158,10 @@ async def send_order_email(
     order_number = order.get("order_number", "")
     customer_name = order.get("customer_name", "")
     drive_url = order.get("drive_order_folder_url", "")
+
+    # Border scans — will be None if processing hasn't completed yet
+    bordered_scans_url = order.get("bordered_scans_drive_url") or None
+    has_border_scan = bool(order.get("border_scan", False))
 
     # Determine blank status
     blank_rolls = [r for r in rolls if r.get("is_blank") or r.get("status") == "blank"]
@@ -177,6 +185,9 @@ async def send_order_email(
         "blank_count": len(blank_rolls),
         "total_rolls": len(rolls),
         "store_name": "digiDirect",
+        # Border scan context — templates check has_border_scan and bordered_scans_url
+        "has_border_scan": has_border_scan,
+        "bordered_scans_url": bordered_scans_url,
     }
 
     try:

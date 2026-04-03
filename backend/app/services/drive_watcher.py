@@ -5,15 +5,19 @@
 # them to Delivered, updates order status, triggers email.
 # ============================================================
 
+import asyncio
 import logging
 import os
 import re
+import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 from supabase import create_client
 
 from app.core.config import settings
@@ -40,12 +44,36 @@ STORE_PREFIXES = {
     "514d0eee-b807-45bd-96bd-eda630be1fba": "A00",     # Brisbane
 }
 
+# ── Fallback paths — used only if drive_config has no paths set for a store ───
+DEFAULT_FILM_SCANS_ROOT        = Path("D:/Film Scans")
+DEFAULT_BORDER_PROCESSING_ROOT = Path("D:/Border Processing")
+# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _get_drive_service():
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=SCOPES
     )
     return build("drive", "v3", credentials=creds)
+
+
+def _get_store_paths(config: dict) -> tuple[Path, Path]:
+    """
+    Return (film_scans_root, border_processing_root) for this store.
+    Values come from drive_config.film_scans_root and
+    drive_config.border_processing_root. Falls back to defaults if not set.
+
+    To configure per store, update the drive_config row in Supabase:
+      film_scans_root        e.g. "D:\\Film Scans"
+      border_processing_root e.g. "D:\\Border Processing"
+    """
+    film_scans = config.get("film_scans_root")
+    border_proc = config.get("border_processing_root")
+
+    film_scans_path  = Path(film_scans)  if film_scans  else DEFAULT_FILM_SCANS_ROOT
+    border_proc_path = Path(border_proc) if border_proc else DEFAULT_BORDER_PROCESSING_ROOT
+
+    return film_scans_path, border_proc_path
 
 
 def _strip_prefix(folder_name: str, store_id: str) -> Optional[str]:
@@ -113,10 +141,7 @@ def _set_folder_public(service, folder_id: str):
     try:
         service.permissions().create(
             fileId=folder_id,
-            body={
-                "role": "reader",
-                "type": "anyone",
-            },
+            body={"role": "reader", "type": "anyone"},
         ).execute()
         logger.info(f"[drive_watcher] Folder {folder_id} set to public viewer")
     except HttpError as e:
@@ -160,32 +185,184 @@ def _get_folder_drive_url(folder_id: str) -> str:
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
-async def run_drive_watcher():
-    logger.info("[drive_watcher] ---- Starting Drive watcher cycle ----")
+# ── Border processing helpers ──────────────────────────────────────────────────
+
+def _find_local_scan_folder(film_scans_root: Path, folder_name: str) -> Optional[Path]:
+    """
+    Locate the scanned image folder on the local Film Scans drive.
+    Structure: {film_scans_root}/{YYYYMMDD}/{prefixed_twin}/
+    film_scans_root comes from drive_config per store — no hardcoding.
+    """
+    if not film_scans_root.exists():
+        logger.warning(f"[border] Film Scans root not found: {film_scans_root}")
+        return None
+
+    for date_folder in sorted(film_scans_root.iterdir(), reverse=True):
+        if not date_folder.is_dir():
+            continue
+        candidate = date_folder / folder_name
+        if candidate.exists() and candidate.is_dir():
+            logger.info(f"[border] Found local scan folder: {candidate}")
+            return candidate
+
+    logger.warning(f"[border] Could not find local scan folder for: {folder_name}")
+    return None
+
+
+def _upload_folder_to_drive(service, local_folder: Path, parent_drive_id: str,
+                              folder_name: str) -> Optional[str]:
+    try:
+        drive_folder_id = _get_or_create_folder(service, parent_drive_id, folder_name)
+        image_files = [
+            f for f in local_folder.iterdir()
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".tif", ".tiff")
+        ]
+        logger.info(f"[border] Uploading {len(image_files)} file(s) to Drive folder '{folder_name}'")
+        for img_file in image_files:
+            mime_type = "image/tiff" if img_file.suffix.lower() in (".tif", ".tiff") else "image/jpeg"
+            media = MediaFileUpload(str(img_file), mimetype=mime_type, resumable=True)
+            service.files().create(
+                body={"name": img_file.name, "parents": [drive_folder_id]},
+                media_body=media,
+                fields="id",
+            ).execute()
+            logger.info(f"[border]   ✓ Uploaded: {img_file.name}")
+        return drive_folder_id
+    except Exception as e:
+        logger.error(f"[border] Upload failed: {e}")
+        return None
+
+
+async def _run_border_processing(
+    client,
+    service,
+    order_id: str,
+    order_number: str,
+    order_folder_id: str,
+    folder_name: str,
+    twin_check: str,
+    film_scans_root: Path,
+    border_processing_root: Path,
+):
+    """
+    Full border processing pipeline for one order.
+    All paths passed in from drive_config — no hardcoding.
+    """
+    logger.info(f"[border] Starting border processing for order {order_number}")
+    logger.info(f"[border] Film Scans: {film_scans_root} | Border Processing: {border_processing_root}")
+
+    client.table("orders").update({
+        "border_scan_status": "processing"
+    }).eq("id", order_id).execute()
+
+    work_dir   = border_processing_root / order_number
+    source_dir = work_dir / "source"
+    output_dir = work_dir / "output"
 
     try:
-        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-        logger.info("[drive_watcher] Supabase client created")
+        local_scan_folder = _find_local_scan_folder(film_scans_root, folder_name)
+        if not local_scan_folder:
+            raise FileNotFoundError(
+                f"Local scan folder not found for twin {twin_check} / folder {folder_name}"
+            )
 
+        source_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        image_extensions = {".jpg", ".jpeg", ".tif", ".tiff"}
+        copied = 0
+        for f in local_scan_folder.iterdir():
+            if f.is_file() and f.suffix.lower() in image_extensions:
+                shutil.copy2(f, source_dir / f.name)
+                copied += 1
+
+        if copied == 0:
+            raise ValueError(f"No image files found in {local_scan_folder}")
+
+        logger.info(f"[border] Copied {copied} image(s) to {source_dir}")
+
+        from app.services.image_processors.border_processor import process_folder
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, process_folder, str(source_dir), str(output_dir),
+        )
+
+        if result["failed"]:
+            logger.warning(f"[border] {len(result['failed'])} image(s) failed")
+
+        if not result["processed"]:
+            raise ValueError("Border processor produced no output files")
+
+        logger.info(f"[border] Processed {len(result['processed'])} image(s) successfully")
+
+        bordered_folder_id = _upload_folder_to_drive(
+            service, output_dir, order_folder_id, "Bordered Scans"
+        )
+        if not bordered_folder_id:
+            raise RuntimeError("Drive upload failed — no folder ID returned")
+
+        _set_folder_public(service, bordered_folder_id)
+
+        bordered_url = _get_folder_drive_url(bordered_folder_id)
+        client.table("orders").update({
+            "border_scan_status": "complete",
+            "bordered_scans_drive_url": bordered_url,
+        }).eq("id", order_id).execute()
+
+        client.table("order_events").insert({
+            "order_id": order_id,
+            "event_type": "border_scan_complete",
+            "description": f"Border processing complete. {len(result['processed'])} image(s) processed.",
+            "actor_label": "border_processor",
+            "metadata": {
+                "bordered_scans_drive_url": bordered_url,
+                "processed_count": len(result["processed"]),
+                "failed_count": len(result["failed"]),
+            },
+        }).execute()
+
+        logger.info(f"[border] ✓ Complete for order {order_number}. Drive: {bordered_url}")
+
+    except Exception as e:
+        logger.error(f"[border] ✗ Failed for order {order_number}: {e}")
+        client.table("orders").update({
+            "border_scan_status": "failed",
+        }).eq("id", order_id).execute()
+        client.table("order_events").insert({
+            "order_id": order_id,
+            "event_type": "border_scan_failed",
+            "description": f"Border processing failed: {e}",
+            "actor_label": "border_processor",
+            "metadata": {"error": str(e)},
+        }).execute()
+
+    finally:
+        try:
+            if work_dir.exists():
+                shutil.rmtree(work_dir)
+                logger.info(f"[border] Cleaned up working dir: {work_dir}")
+        except Exception as cleanup_err:
+            logger.warning(f"[border] Cleanup failed for {work_dir}: {cleanup_err}")
+
+
+# ── Main watcher ───────────────────────────────────────────────────────────────
+
+async def run_drive_watcher():
+    logger.info("[drive_watcher] ---- Starting Drive watcher cycle ----")
+    try:
+        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
         configs = client.table("drive_config").select("*").eq("enabled", True).execute()
         logger.info(f"[drive_watcher] Found {len(configs.data)} enabled store config(s)")
-
         if not configs.data:
-            logger.info("[drive_watcher] No enabled store configs found.")
             return
-
         service = _get_drive_service()
-        logger.info("[drive_watcher] Drive service authenticated")
-
         for config in configs.data:
             try:
                 await _process_store(client, service, config)
             except Exception as e:
                 logger.error(f"[drive_watcher] Error processing store {config.get('store_id')}: {e}")
-
     except Exception as e:
         logger.error(f"[drive_watcher] Fatal error in watcher: {e}")
-
     logger.info("[drive_watcher] ---- Watcher cycle complete ----")
 
 
@@ -196,17 +373,13 @@ async def _process_store(client, service, config: dict):
     stabilise_seconds = config.get("stabilise_seconds", 30)
 
     logger.info(f"[drive_watcher] Processing store {store_id}")
-    logger.info(f"[drive_watcher] Checking inbox folder: {inbox_folder_id}")
-
     folders = _list_inbox_folders(service, inbox_folder_id)
     logger.info(f"[drive_watcher] Found {len(folders)} folder(s) in inbox")
 
     if not folders:
-        logger.info(f"[drive_watcher] No folders in inbox for store {store_id}")
         return
 
     for folder in folders:
-        logger.info(f"[drive_watcher] Processing folder: {folder['name']} (id: {folder['id']})")
         await _process_folder(
             client, service, config,
             folder, inbox_folder_id, delivered_folder_id,
@@ -216,59 +389,39 @@ async def _process_store(client, service, config: dict):
 
 async def _process_folder(client, service, config, folder, inbox_folder_id,
                            delivered_folder_id, store_id, stabilise_seconds):
-    folder_id = folder["id"]
+    folder_id   = folder["id"]
     folder_name = folder["name"]
     modified_time = folder.get("modifiedTime", "")
 
     logger.info(f"[drive_watcher] --- Processing folder: {folder_name} ---")
 
-    # ── Rule 5: Idempotency ──
-    existing = client.table("drive_watcher_log").select("status").eq(
-        "folder_id", folder_id
-    ).execute()
-
+    existing = client.table("drive_watcher_log").select("status").eq("folder_id", folder_id).execute()
     if existing.data:
         existing_status = existing.data[0]["status"]
-        logger.info(f"[drive_watcher] Existing log status: {existing_status}")
         if existing_status in ("moved", "emailed", "skipped"):
-            logger.info(f"[drive_watcher] Skipping already processed folder: {folder_name}")
             return
         if existing_status == "processing":
-            logger.info(f"[drive_watcher] Folder already being processed: {folder_name}")
             return
-    else:
-        logger.info(f"[drive_watcher] No existing log entry — proceeding")
 
-    # ── Rule 4: Stabilisation ──
-    stable = _is_stable(modified_time, stabilise_seconds)
-    logger.info(f"[drive_watcher] Folder stable: {stable} (modified: {modified_time}, required wait: {stabilise_seconds}s)")
-    if not stable:
+    if not _is_stable(modified_time, stabilise_seconds):
         logger.info(f"[drive_watcher] Folder not stable yet: {folder_name}")
         return
 
-    # ── Parse twin check ──
     twin = _strip_prefix(folder_name, store_id)
-    logger.info(f"[drive_watcher] Parsed twin: {twin} from folder: {folder_name}")
     if not twin:
         logger.warning(f"[drive_watcher] Cannot parse twin from folder: {folder_name}")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "skipped", "Could not parse twin check from folder name")
         return
 
-    # ── Lock ──
     _log_watcher_event(client, store_id, folder_id, folder_name, "processing",
                        f"Parsed twin: {twin}")
 
-    # ── Find matching roll ──
-    logger.info(f"[drive_watcher] Looking up twin {twin} for store {store_id}")
     rolls = client.table("rolls").select(
         "id, twin_check, order_id, status, date_scanned, drive_folder_url, store_id"
     ).eq("twin_check", twin).eq("store_id", store_id).execute()
 
-    logger.info(f"[drive_watcher] Roll lookup returned {len(rolls.data) if rolls.data else 0} result(s)")
-
     if not rolls.data:
-        logger.warning(f"[drive_watcher] No roll found for twin {twin} at store {store_id}")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "skipped", f"No roll found for twin {twin}")
         return
@@ -280,10 +433,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         and r.get("status") not in ("delivered", "blank", "archived")
     ]
 
-    logger.info(f"[drive_watcher] Eligible candidates: {len(candidates)}")
-
     if len(candidates) > 1:
-        logger.error(f"[drive_watcher] AMBIGUOUS: {len(candidates)} candidates for twin {twin}")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "ambiguous", f"{len(candidates)} matching rolls found for twin {twin}")
         return
@@ -291,75 +441,60 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
     if len(candidates) == 0:
         already_scanned = [r for r in rolls.data if r.get("date_scanned") is not None]
         if already_scanned:
-            logger.warning(f"[drive_watcher] RESCAN_DETECTED for twin {twin}")
             _log_watcher_event(client, store_id, folder_id, folder_name,
-                               "rescan_detected",
-                               "Roll already scanned. Staff must approve rescan in RollCall.")
+                               "rescan_detected", "Roll already scanned.")
         else:
-            logger.warning(f"[drive_watcher] No eligible roll for twin {twin}")
             _log_watcher_event(client, store_id, folder_id, folder_name,
                                "skipped", f"No eligible roll for twin {twin}")
         return
 
     roll = candidates[0]
-    roll_id = roll["id"]
+    roll_id  = roll["id"]
     order_id = roll["order_id"]
-    logger.info(f"[drive_watcher] Matched roll {roll_id} to order {order_id}")
 
-    # ── Fetch the order ──
     order_result = client.table("orders").select(
-        "id, order_number, customer_name, customer_email, status, order_type, store_id, drive_order_folder_url"
+        "id, order_number, customer_name, customer_email, status, order_type, "
+        "store_id, drive_order_folder_url, border_scan, bordered_scans_drive_url"
     ).eq("id", order_id).execute()
 
     if not order_result.data:
-        logger.error(f"[drive_watcher] Order {order_id} not found")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "error", f"Order {order_id} not found", roll_id=roll_id)
         return
 
     order = order_result.data[0]
-    logger.info(f"[drive_watcher] Found order: {order['order_number']} for {order['customer_name']}")
 
-    # ── Build Delivered folder path ──
+    # ── Get store-specific local paths from drive_config ──
+    film_scans_root, border_processing_root = _get_store_paths(config)
+    logger.info(f"[drive_watcher] Paths — Film Scans: {film_scans_root} | Border Processing: {border_processing_root}")
+
     now = datetime.now()
-    year_str = str(now.year)
-    month_str = str(now.month)
     order_folder_name = f"{order['order_number']} {order['customer_name']}"
-    logger.info(f"[drive_watcher] Creating folder path: Delivered/{year_str}/{month_str}/{order_folder_name}")
-
-    year_folder_id = _get_or_create_folder(service, delivered_folder_id, year_str)
-    month_folder_id = _get_or_create_folder(service, year_folder_id, month_str)
+    year_folder_id  = _get_or_create_folder(service, delivered_folder_id, str(now.year))
+    month_folder_id = _get_or_create_folder(service, year_folder_id, str(now.month))
     order_folder_id = _get_or_create_folder(service, month_folder_id, order_folder_name)
-    logger.info(f"[drive_watcher] Order folder ID: {order_folder_id}")
 
-    # ── Move roll folder ──
     try:
         _move_folder(service, folder_id, order_folder_id, inbox_folder_id)
         logger.info(f"[drive_watcher] Moved {folder_name} → {order_folder_name}")
     except HttpError as e:
-        logger.error(f"[drive_watcher] Failed to move folder: {e}")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "error", f"Move failed: {e}", roll_id=roll_id, order_id=order_id)
         return
 
-    # ── Set folder public ──
     drive_url = _get_folder_drive_url(order_folder_id)
     _set_folder_public(service, order_folder_id)
-    logger.info(f"[drive_watcher] Drive URL: {drive_url}")
 
-    # ── Update roll ──
     client.table("rolls").update({
         "date_scanned": datetime.utcnow().isoformat(),
         "drive_folder_url": drive_url,
         "status": "scanned",
     }).eq("id", roll_id).execute()
-    logger.info(f"[drive_watcher] Roll {roll_id} marked as scanned")
 
     _log_watcher_event(client, store_id, folder_id, folder_name,
                        "moved", f"Moved to {order_folder_name}",
                        roll_id=roll_id, order_id=order_id)
 
-    # ── Check if all rolls scanned ──
     all_rolls = client.table("rolls").select(
         "id, status, date_scanned, is_blank"
     ).eq("order_id", order_id).execute()
@@ -372,14 +507,9 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         and r.get("status") not in ("blank", "delivered", "archived")
     ]
 
-    logger.info(f"[drive_watcher] Unscanned rolls remaining: {len(unscanned)}")
-
     if unscanned:
         logger.info(f"[drive_watcher] Order {order['order_number']} waiting for {len(unscanned)} more roll(s)")
         return
-
-    # ── All rolls done ──
-    logger.info(f"[drive_watcher] All rolls complete for order {order['order_number']} — sending email")
 
     client.table("orders").update({
         "status": "delivered",
@@ -396,19 +526,31 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         "metadata": {"drive_url": drive_url, "roll_id": roll_id},
     }).execute()
 
-    # ── Send email ──
     try:
         from app.services.email_service import send_order_email
-        # Inject drive URL into order dict so template receives it
         order["drive_order_folder_url"] = drive_url
-        logger.info(f"[drive_watcher] Sending email to {order['customer_email']}")
         await send_order_email(client, config, order, total_rolls)
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "emailed", "Email sent successfully",
                            roll_id=roll_id, order_id=order_id)
-        logger.info(f"[drive_watcher] Email sent successfully")
     except Exception as e:
         logger.error(f"[drive_watcher] Email failed for order {order['order_number']}: {e}")
         _log_watcher_event(client, store_id, folder_id, folder_name,
                            "error", f"Email failed: {e}",
                            roll_id=roll_id, order_id=order_id)
+
+    if order.get("border_scan"):
+        logger.info(f"[drive_watcher] Border scan enabled — queuing job for order {order['order_number']}")
+        asyncio.create_task(
+            _run_border_processing(
+                client=client,
+                service=service,
+                order_id=order_id,
+                order_number=order["order_number"],
+                order_folder_id=order_folder_id,
+                folder_name=folder_name,
+                twin_check=twin,
+                film_scans_root=film_scans_root,
+                border_processing_root=border_processing_root,
+            )
+        )

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
 from uuid import UUID
+import asyncio
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
@@ -188,6 +189,98 @@ async def add_rolls_to_order(
     return _enrich(order)
 
 
+@router.post("/{order_id}/retry-border")
+async def retry_border_processing(
+    order_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retry border processing for an order that previously failed.
+    Resets border_scan_status to None and re-queues the processing job.
+    """
+    order = await order_service.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if not order.border_scan:
+        raise HTTPException(status_code=400, detail="Order does not have border scan enabled")
+
+    if order.border_scan_status == "processing":
+        raise HTTPException(status_code=400, detail="Border processing is already in progress")
+
+    # Find the first scanned roll to get twin/folder info
+    scanned_rolls = [r for r in (order.rolls or []) if r.drive_folder_url]
+    if not scanned_rolls:
+        raise HTTPException(status_code=400, detail="No scanned rolls found — cannot locate source images")
+
+    roll = scanned_rolls[0]
+
+    # Look up Drive config for this store
+    from supabase import create_client
+    from app.core.config import settings
+    from app.services.drive_watcher import _get_drive_service, _get_or_create_folder, STORE_PREFIXES, _build_prefix
+
+    client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+
+    config_result = client.table("drive_config").select("*").eq(
+        "store_id", str(order.store_id)
+    ).execute()
+
+    if not config_result.data:
+        raise HTTPException(status_code=500, detail="No Drive config found for this store")
+
+    config = config_result.data[0]
+
+    # Reset status to processing
+    from datetime import datetime
+    await db.execute(
+        select(Order).where(Order.id == order_id)
+    )
+    # Use raw supabase update for the new columns (not yet in SQLAlchemy session)
+    client.table("orders").update({
+        "border_scan_status": None,
+        "bordered_scans_drive_url": None,
+    }).eq("id", str(order_id)).execute()
+
+    # Log the retry
+    client.table("order_events").insert({
+        "order_id": str(order_id),
+        "event_type": "border_scan_retry",
+        "description": f"Border processing retry requested by {_actor(current_user)}",
+        "actor_label": _actor(current_user),
+        "metadata": {},
+    }).execute()
+
+    # Reconstruct the order folder Drive ID from the existing drive_order_folder_url
+    # The URL format is: https://drive.google.com/drive/folders/{folder_id}
+    drive_url = order.drive_order_folder_url or ""
+    order_folder_id = drive_url.rstrip("/").split("/")[-1] if drive_url else None
+
+    if not order_folder_id:
+        raise HTTPException(status_code=400, detail="Cannot determine Drive folder ID from order")
+
+    # Build folder name (prefixed twin) from first scanned roll
+    folder_name = _build_prefix(roll.twin_check, str(order.store_id))
+
+    # Fire the background task
+    from app.services.drive_watcher import _run_border_processing
+    service = _get_drive_service()
+    asyncio.create_task(
+        _run_border_processing(
+            client=client,
+            service=service,
+            order_id=str(order_id),
+            order_number=order.order_number,
+            order_folder_id=order_folder_id,
+            folder_name=folder_name,
+            twin_check=roll.twin_check,
+        )
+    )
+
+    return {"status": "queued", "message": "Border processing has been re-queued"}
+
+
 @router.get("/{order_id}/events")
 async def get_events(
     order_id: UUID,
@@ -208,7 +301,7 @@ async def get_events(
             "event_type": e.event_type,
             "description": e.description,
             "actor_label": e.actor_label,
-            "metadata": e.metadata,
+            "metadata": e.event_data,
             "created_at": e.created_at.isoformat(),
         }
         for e in events
@@ -216,7 +309,7 @@ async def get_events(
 
 
 def _enrich(order: Order) -> dict:
-    """Add store_name to order dict for frontend convenience."""
+    """Add store_name and border scan fields to order dict for frontend."""
     return {
         "id": str(order.id),
         "order_number": order.order_number,
@@ -234,6 +327,12 @@ def _enrich(order: Order) -> dict:
         "drive_order_folder_url": order.drive_order_folder_url,
         "is_print_only": order.is_print_only,
         "has_blanks": order.has_blanks,
+        # Border scan fields
+        "border_scan": order.border_scan or False,
+        "contact_sheet": order.contact_sheet or False,
+        "rebate_scan": order.rebate_scan or False,
+        "border_scan_status": order.border_scan_status,
+        "bordered_scans_drive_url": order.bordered_scans_drive_url,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "date_scanned": order.date_scanned.isoformat() if order.date_scanned else None,
         "date_delivered": order.date_delivered.isoformat() if order.date_delivered else None,

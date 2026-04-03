@@ -70,11 +70,27 @@
                 <tr>
                   <td bgcolor="#ff6600" style="border-radius:4px;">
                     <a href="{{ drive_url }}" style="display:inline-block; padding:10px 20px; font-family: Arial, sans-serif; font-size:14px; color:#ffffff; text-decoration:none;">
-                      Link to image files
+                      📁 Your scans
                     </a>
                   </td>
                 </tr>
               </table>
+              {% endif %}
+
+              {% if bordered_scans_url %}
+              <!-- BORDERED SCANS LINK — only shown when border processing is complete -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:12px auto 0 auto;">
+                <tr>
+                  <td bgcolor="#222222" style="border-radius:4px;">
+                    <a href="{{ bordered_scans_url }}" style="display:inline-block; padding:10px 20px; font-family: Arial, sans-serif; font-size:14px; color:#ffffff; text-decoration:none;">
+                      🖼️ Bordered scans
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:12px; color:#666666; text-align:center; margin:8px 0 0 0;">
+                Your bordered scans include a classic film border applied to each image.
+              </p>
               {% endif %}
 
               <p style="font-size:14px; line-height:1.5; margin:18px 0 20px 0;">
@@ -157,16 +173,3 @@
   </table>
 </body>
 </html>
-```
-
----
-
-**File 3b — `prints_and_scans_ready.html`** (Dev+Scan+Print — same as scans_ready, heading changes)
-
-This is identical to `scans_ready.html` — just save a copy and change the heading line from:
-```
-Your image files are ready
-```
-to:
-```
-Your prints and scans are ready
