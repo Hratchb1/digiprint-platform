@@ -1,17 +1,27 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, update
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, timedelta
+import logging
 
 from app.models.orm import Order, Roll, OrderEvent, Store
 from app.models.schemas import (
     OrderCreate, OrderStatusUpdate, DashboardStats
 )
 
+logger = logging.getLogger(__name__)
+
 # Statuses that free up twin checks for reuse
 TWIN_EXPIRY_STATUSES = {"delivered", "blank", "devready", "printready"}
+
+# SKUs that set addon service flags on orders
+ADDON_SKU_FLAGS = {
+    "177426": "border_scan",
+    "177427": "contact_sheet",
+    "177428": "rebate_scan",
+}
 
 
 class OrderService:
@@ -23,6 +33,10 @@ class OrderService:
         if dups:
             raise ValueError(f"Twin checks already exist in this store: {', '.join(dups)}")
 
+        # Check pronto_cache for addon SKUs BEFORE creating the order
+        # so the flags are set correctly in the initial API response
+        addon_flags = self._get_addon_flags_from_pronto(payload.order_number)
+
         order = Order(
             order_number=payload.order_number,
             store_id=payload.store_id,
@@ -32,6 +46,10 @@ class OrderService:
             order_type=payload.order_type.value,
             operator_initials=payload.operator_initials,
             notes=payload.notes,
+            # Set addon flags directly on the ORM object
+            border_scan=addon_flags.get("border_scan", False),
+            contact_sheet=addon_flags.get("contact_sheet", False),
+            rebate_scan=addon_flags.get("rebate_scan", False),
         )
         db.add(order)
         await db.flush()
@@ -46,6 +64,14 @@ class OrderService:
             )
             db.add(roll)
 
+        if any(addon_flags.values()):
+            logger.info(
+                f"[order_service] Order {payload.order_number} — addon flags set from Pronto: "
+                f"border_scan={addon_flags.get('border_scan')}, "
+                f"contact_sheet={addon_flags.get('contact_sheet')}, "
+                f"rebate_scan={addon_flags.get('rebate_scan')}"
+            )
+
         await self._log_event(db, order.id, "booked",
                               f"Order booked with {len(payload.rolls)} roll(s)",
                               actor_label=actor_label,
@@ -53,6 +79,33 @@ class OrderService:
         await db.commit()
         await db.refresh(order)
         return order
+
+    def _get_addon_flags_from_pronto(self, order_number: str) -> dict:
+        """
+        Synchronously check pronto_cache for addon SKUs (177426/177427/177428).
+        Returns a dict of flag names to booleans.
+        Called before order creation so flags are set in the initial response.
+        """
+        flags = {"border_scan": False, "contact_sheet": False, "rebate_scan": False}
+        try:
+            from supabase import create_client
+            from app.core.config import settings
+
+            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+            result = client.table("pronto_cache").select(
+                "sku_code"
+            ).eq("sales_order_number", order_number).execute()
+
+            if result.data:
+                skus = {row["sku_code"] for row in result.data if row.get("sku_code")}
+                flags["border_scan"]   = "177426" in skus
+                flags["contact_sheet"] = "177427" in skus
+                flags["rebate_scan"]   = "177428" in skus
+
+        except Exception as e:
+            logger.warning(f"[order_service] Could not check addon flags for {order_number}: {e}")
+
+        return flags
 
     async def get_order(self, db: AsyncSession, order_id: UUID) -> Optional[Order]:
         result = await db.execute(
@@ -119,8 +172,6 @@ class OrderService:
                     roll.date_delivered = datetime.utcnow()
 
         # --- Twin check expiry ---
-        # When an order reaches a terminal/notified status, archive all twin checks
-        # so they become available for reuse at this store.
         if new_status in TWIN_EXPIRY_STATUSES:
             archived_twins = []
             for roll in order.rolls:
@@ -146,11 +197,7 @@ class OrderService:
         return order
 
     async def reset_twin_checks(self, db: AsyncSession, order_id: UUID, actor_label: str = "system") -> Order:
-        """
-        Manually release/reset all twin checks on an order back to 'available'
-        (i.e. status = 'booked') so they can be reassigned or reused.
-        Admin-only action — exposed via POST /api/orders/{order_id}/reset-twins.
-        """
+        """Manually re-lock archived twin checks on an order. Admin only."""
         order = await self.get_order(db, order_id)
         if not order:
             raise ValueError(f"Order {order_id} not found")
@@ -158,7 +205,6 @@ class OrderService:
         reset_twins = []
         for roll in order.rolls:
             if roll.status == "archived":
-                # Restore to 'booked' — the neutral active state meaning "this twin is in use"
                 roll.status = "booked"
                 reset_twins.append(roll.twin_check)
 

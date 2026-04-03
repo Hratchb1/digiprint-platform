@@ -2,6 +2,9 @@
 # ============================================================
 # Fetches the Pronto master Google Sheet (CSV export) every
 # 10 minutes and syncs it into the pronto_cache table.
+# After caching, scans existing orders and auto-sets
+# border_scan / contact_sheet / rebate_scan flags based on
+# SKU presence (177426 / 177427 / 177428).
 # Uses Supabase HTTP client instead of direct DB connection.
 # ============================================================
 
@@ -24,6 +27,13 @@ CSV_URL  = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
     f"/gviz/tq?tqx=out:csv&sheet={TAB_NAME}"
 )
+
+# ── SKUs that set add-on service flags on orders ─────────────
+ADDON_SKU_FLAGS = {
+    "177426": "border_scan",
+    "177427": "contact_sheet",
+    "177428": "rebate_scan",
+}
 
 # ── Column name normalisers ──────────────────────────────────
 COLUMN_MAP = {
@@ -120,12 +130,85 @@ def get_sku_map() -> dict[str, dict]:
     }
 
 
+def _build_addon_flag_map(rows: list[dict]) -> dict[str, dict]:
+    """
+    Scan all pronto_cache rows and build a map of:
+        order_number -> { "border_scan": bool, "contact_sheet": bool, "rebate_scan": bool }
+
+    Only includes orders where at least one addon SKU is present.
+    """
+    addon_map: dict[str, dict] = {}
+
+    for row in rows:
+        order_num = row.get("sales_order_number", "").strip()
+        sku_code  = row.get("sku_code", "").strip()
+
+        if not order_num or sku_code not in ADDON_SKU_FLAGS:
+            continue
+
+        flag_name = ADDON_SKU_FLAGS[sku_code]
+
+        if order_num not in addon_map:
+            addon_map[order_num] = {
+                "border_scan":    False,
+                "contact_sheet":  False,
+                "rebate_scan":    False,
+            }
+
+        addon_map[order_num][flag_name] = True
+
+    return addon_map
+
+
+def _apply_addon_flags(client, addon_map: dict[str, dict]) -> int:
+    """
+    For each order number in addon_map, find the matching order in the
+    orders table and update the addon flags.
+
+    Returns the number of orders updated.
+    """
+    if not addon_map:
+        return 0
+
+    updated = 0
+    order_numbers = list(addon_map.keys())
+
+    # Fetch matching orders from Supabase in one query
+    # Supabase 'in' filter — fetch all orders whose order_number is in our list
+    result = client.table("orders").select("id, order_number").in_(
+        "order_number", order_numbers
+    ).execute()
+
+    if not result.data:
+        return 0
+
+    for order_row in result.data:
+        order_id     = order_row["id"]
+        order_number = order_row["order_number"]
+        flags        = addon_map.get(order_number)
+
+        if not flags:
+            continue
+
+        client.table("orders").update(flags).eq("id", order_id).execute()
+        updated += 1
+        logger.info(
+            f"[pronto_sync] Order {order_number} — addon flags set: "
+            f"border_scan={flags['border_scan']}, "
+            f"contact_sheet={flags['contact_sheet']}, "
+            f"rebate_scan={flags['rebate_scan']}"
+        )
+
+    return updated
+
+
 async def sync_pronto_cache() -> dict:
     """
     Main sync job.
     1. Fetch rows from Google Sheet
     2. Clear pronto_cache via Supabase client
     3. Re-insert all rows with resolved SKU data
+    4. Scan for addon SKUs (177426/177427/177428) and update order flags
     """
     logger.info("[pronto_sync] Starting Pronto cache sync...")
 
@@ -182,24 +265,29 @@ async def sync_pronto_cache() -> dict:
             batch.append(record)
             inserted += 1
 
-            # Insert in batches of 500
             if len(batch) >= 500:
                 client.table("pronto_cache").insert(batch).execute()
                 batch = []
 
-        # Insert remaining rows
         if batch:
             client.table("pronto_cache").insert(batch).execute()
+
+        # ── Fix 2: Auto-detect addon SKUs and update order flags ──
+        addon_map     = _build_addon_flag_map(rows)
+        orders_updated = _apply_addon_flags(client, addon_map)
+        if orders_updated:
+            logger.info(f"[pronto_sync] Addon flags updated on {orders_updated} order(s)")
 
     except Exception as exc:
         logger.error(f"[pronto_sync] Database error: {exc}")
         return {"status": "error", "message": str(exc)}
 
     summary = {
-        "status":    "ok",
-        "inserted":  inserted,
-        "skipped":   skipped,
-        "synced_at": datetime.utcnow().isoformat(),
+        "status":         "ok",
+        "inserted":       inserted,
+        "skipped":        skipped,
+        "orders_updated": orders_updated if 'orders_updated' in locals() else 0,
+        "synced_at":      datetime.utcnow().isoformat(),
     }
     logger.info(f"[pronto_sync] Complete — {inserted} rows inserted, {skipped} skipped")
     return summary

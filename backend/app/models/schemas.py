@@ -163,7 +163,6 @@ class OrderCreateFromPronto(BaseModel):
     store_id: UUID
     rolls: List[RollIntake]
     operator_initials: Optional[str] = None
-    # Customer data comes from Pronto lookup endpoint
     customer_name: str
     customer_email: Optional[str] = None
     account: Optional[str] = None
@@ -174,6 +173,7 @@ class OrderRead(BaseModel):
     id: UUID
     order_number: str
     order_type: str
+    order_date: Optional[str] = None
     status: str
     customer_name: str
     customer_email: Optional[str]
@@ -187,6 +187,12 @@ class OrderRead(BaseModel):
     drive_order_folder_url: Optional[str]
     is_print_only: bool
     has_blanks: bool
+    # Border / addon scan flags
+    border_scan: bool = False
+    contact_sheet: bool = False
+    rebate_scan: bool = False
+    border_scan_status: Optional[str] = None
+    bordered_scans_drive_url: Optional[str] = None
     created_at: datetime
     date_scanned: Optional[datetime]
     date_delivered: Optional[datetime]
