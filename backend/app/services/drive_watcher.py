@@ -35,19 +35,52 @@ SERVICE_ACCOUNT_FILE = os.path.join(
     "service_account.json"
 )
 
-STORE_PREFIXES = {
-    "a90c273e-49ff-4733-b709-31066f2ec503": "0000",   # Bondi
-    "ff8bdc2e-966b-4a49-80b2-af5030148095": "0000",   # Miranda
-    "8a525dc4-c1c2-48a0-a315-c03082b63f3e": "0000",   # Cannington
-    "87ed3978-0d69-4acd-89f5-8e60dd121165": "",        # Parramatta (raw)
-    "f2635a53-93ca-499f-aad4-4eb5e7f9128c": "",        # Melbourne (raw)
-    "514d0eee-b807-45bd-96bd-eda630be1fba": "A00",     # Brisbane
-}
-
-# ── Fallback paths — used only if drive_config has no paths set for a store ───
+# ── Fallback paths — used only if drive_config has no paths set for a store ──
 DEFAULT_FILM_SCANS_ROOT        = Path("D:/Film Scans")
 DEFAULT_BORDER_PROCESSING_ROOT = Path("D:/Border Processing")
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Module-level prefix cache — populated once per watcher cycle
+# Maps store_id (str) -> prefix (str or None)
+_prefix_cache: dict[str, Optional[str]] = {}
+
+
+def _load_store_prefixes(client) -> dict[str, Optional[str]]:
+    """
+    Load twin folder prefix rules from store_settings table.
+    Called once per watcher cycle and cached for that cycle.
+    Returns a dict mapping store_id -> prefix (or None for raw twin).
+    """
+    try:
+        result = client.table("store_settings").select(
+            "store_id, twin_folder_prefix"
+        ).execute()
+
+        prefixes = {}
+        for row in result.data:
+            store_id = row["store_id"]
+            prefix = row.get("twin_folder_prefix")  # None = raw 4-digit twin
+            prefixes[store_id] = prefix
+
+        logger.info(f"[drive_watcher] Loaded prefix rules for {len(prefixes)} store(s) from store_settings")
+        return prefixes
+
+    except Exception as e:
+        logger.error(f"[drive_watcher] Failed to load store prefixes from store_settings: {e}")
+        # Hard fallback — known rules in case DB is unreachable
+        return {
+            "a90c273e-49ff-4733-b709-31066f2ec503": "0000",   # Bondi
+            "ff8bdc2e-966b-4a49-80b2-af5030148095": "0000",   # Miranda
+            "8a525dc4-c1c2-48a0-a315-c03082b63f3e": "0000",   # Cannington
+            "87ed3978-0d69-4acd-89f5-8e60dd121165": None,     # Parramatta
+            "f2635a53-93ca-499f-aad4-4eb5e7f9128c": None,     # Melbourne
+            "514d0eee-b807-45bd-96bd-eda630be1fba": "A00",    # Brisbane
+        }
+
+
+def _get_prefix(store_id: str) -> Optional[str]:
+    """Return the prefix for a store from the cycle cache."""
+    return _prefix_cache.get(store_id)
 
 
 def _get_drive_service():
@@ -58,26 +91,15 @@ def _get_drive_service():
 
 
 def _get_store_paths(config: dict) -> tuple[Path, Path]:
-    """
-    Return (film_scans_root, border_processing_root) for this store.
-    Values come from drive_config.film_scans_root and
-    drive_config.border_processing_root. Falls back to defaults if not set.
-
-    To configure per store, update the drive_config row in Supabase:
-      film_scans_root        e.g. "D:\\Film Scans"
-      border_processing_root e.g. "D:\\Border Processing"
-    """
     film_scans = config.get("film_scans_root")
     border_proc = config.get("border_processing_root")
-
     film_scans_path  = Path(film_scans)  if film_scans  else DEFAULT_FILM_SCANS_ROOT
     border_proc_path = Path(border_proc) if border_proc else DEFAULT_BORDER_PROCESSING_ROOT
-
     return film_scans_path, border_proc_path
 
 
 def _strip_prefix(folder_name: str, store_id: str) -> Optional[str]:
-    prefix = STORE_PREFIXES.get(store_id, "")
+    prefix = _get_prefix(store_id)
     if prefix:
         if folder_name.startswith(prefix):
             raw = folder_name[len(prefix):]
@@ -91,8 +113,8 @@ def _strip_prefix(folder_name: str, store_id: str) -> Optional[str]:
 
 
 def _build_prefix(twin: str, store_id: str) -> str:
-    prefix = STORE_PREFIXES.get(store_id, "")
-    return f"{prefix}{twin}"
+    prefix = _get_prefix(store_id)
+    return f"{prefix}{twin}" if prefix else twin
 
 
 def _list_inbox_folders(service, inbox_folder_id: str) -> list[dict]:
@@ -185,14 +207,9 @@ def _get_folder_drive_url(folder_id: str) -> str:
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
-# ── Border processing helpers ──────────────────────────────────────────────────
+# ── Border processing helpers ─────────────────────────────────────────────────
 
 def _find_local_scan_folder(film_scans_root: Path, folder_name: str) -> Optional[Path]:
-    """
-    Locate the scanned image folder on the local Film Scans drive.
-    Structure: {film_scans_root}/{YYYYMMDD}/{prefixed_twin}/
-    film_scans_root comes from drive_config per store — no hardcoding.
-    """
     if not film_scans_root.exists():
         logger.warning(f"[border] Film Scans root not found: {film_scans_root}")
         return None
@@ -244,12 +261,7 @@ async def _run_border_processing(
     film_scans_root: Path,
     border_processing_root: Path,
 ):
-    """
-    Full border processing pipeline for one order.
-    All paths passed in from drive_config — no hardcoding.
-    """
     logger.info(f"[border] Starting border processing for order {order_number}")
-    logger.info(f"[border] Film Scans: {film_scans_root} | Border Processing: {border_processing_root}")
 
     client.table("orders").update({
         "border_scan_status": "processing"
@@ -345,12 +357,18 @@ async def _run_border_processing(
             logger.warning(f"[border] Cleanup failed for {work_dir}: {cleanup_err}")
 
 
-# ── Main watcher ───────────────────────────────────────────────────────────────
+# ── Main watcher ──────────────────────────────────────────────────────────────
 
 async def run_drive_watcher():
+    global _prefix_cache
+
     logger.info("[drive_watcher] ---- Starting Drive watcher cycle ----")
     try:
         client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+
+        # Load prefix rules from store_settings once per cycle
+        _prefix_cache = _load_store_prefixes(client)
+
         configs = client.table("drive_config").select("*").eq("enabled", True).execute()
         logger.info(f"[drive_watcher] Found {len(configs.data)} enabled store config(s)")
         if not configs.data:
@@ -463,10 +481,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         return
 
     order = order_result.data[0]
-
-    # ── Get store-specific local paths from drive_config ──
     film_scans_root, border_processing_root = _get_store_paths(config)
-    logger.info(f"[drive_watcher] Paths — Film Scans: {film_scans_root} | Border Processing: {border_processing_root}")
 
     now = datetime.now()
     order_folder_name = f"{order['order_number']} {order['customer_name']}"

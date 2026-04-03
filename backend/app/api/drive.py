@@ -123,6 +123,28 @@ async def get_watcher_log(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/log/order/{order_id}")
+async def get_watcher_log_for_order(order_id: UUID):
+    """
+    Get drive watcher log entries for a specific order.
+    Used by the Order Detail page to show rescan alerts.
+    Returns only rescan_detected entries so the UI can prompt staff to approve.
+    """
+    try:
+        client = get_supabase()
+        result = client.table("drive_watcher_log").select("*").eq(
+            "order_id", str(order_id)
+        ).eq(
+            "status", "rescan_detected"
+        ).order(
+            "created_at", desc=True
+        ).execute()
+
+        return {"order_id": str(order_id), "rescans": result.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/log/{folder_id}")
 async def clear_watcher_log_entry(folder_id: str):
     """

@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ordersApi } from '../lib/api'
 import { useState } from 'react'
-import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail } from 'lucide-react'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 
@@ -13,7 +13,6 @@ const STATUS_STYLES: Record<string, string> = {
   delivered:   'bg-green-500/10 text-green-400 border-green-500/20',
   blank:       'bg-red-500/10 text-red-400 border-red-500/20',
   print_ready: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  // archived is an internal system status — always display as delivered
   archived:    'bg-green-500/10 text-green-400 border-green-500/20',
 }
 
@@ -22,14 +21,22 @@ const NEXT_STATUSES: Record<string, string[]> = {
   processing:  ['scanned', 'delivered', 'cancelled'],
   scanned:     ['delivered', 'print_ready', 'cancelled'],
   print_ready: ['delivered'],
-  // delivered is terminal — no manual transitions after this point
-  // twin checks are released automatically by the system
 }
 
-// Roll status is internal — "archived" means twin released, display as "delivered" to staff
 function displayRollStatus(status: string): string {
   if (status === 'archived') return 'delivered'
   return status
+}
+
+function getEmailButtonLabel(order: any): string | null {
+  const rolls = order.rolls || []
+  const serviceTypes = [...new Set(rolls.map((r: any) => r.service_type))] as string[]
+  const isDevOnly = serviceTypes.every(s => s === 'Dev only')
+  const isPrintOnly = order.is_print_only || serviceTypes.every(s => s === 'Print only')
+  if (order.email_status === 'failed') return 'Resend Email'
+  if (isDevOnly) return 'Notify: Negatives Ready'
+  if (isPrintOnly) return 'Notify: Prints Ready'
+  return null
 }
 
 export default function OrderDetailPage() {
@@ -40,12 +47,12 @@ export default function OrderDetailPage() {
   const [driveLink, setDriveLink] = useState('')
   const [showDriveInput, setShowDriveInput] = useState(false)
   const [selectedRolls, setSelectedRolls] = useState<Set<string>>(new Set())
+  const [emailToast, setEmailToast] = useState<{ type: 'success' | 'error', message: string } | null>(null)
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['order', id],
     queryFn: () => ordersApi.get(id!),
     enabled: !!id,
-    // Poll every 10s if border processing is in progress
     refetchInterval: (data: any) =>
       data?.border_scan_status === 'processing' ? 10000 : false,
   })
@@ -56,10 +63,25 @@ export default function OrderDetailPage() {
     enabled: !!id,
   })
 
+  // Fetch rescan alerts for this order
+  const { data: rescanData, refetch: refetchRescans } = useQuery({
+    queryKey: ['order-rescans', id],
+    queryFn: () => fetch(`/api/drive/log/order/${id}`)
+      .then(r => r.json()),
+    enabled: !!id,
+  })
+  const rescans = rescanData?.rescans || []
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['order', id] })
     qc.invalidateQueries({ queryKey: ['order-events', id] })
     qc.invalidateQueries({ queryKey: ['orders-recent'] })
+    qc.invalidateQueries({ queryKey: ['order-rescans', id] })
+  }
+
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setEmailToast({ type, message })
+    setTimeout(() => setEmailToast(null), 4000)
   }
 
   const statusMutation = useMutation({
@@ -93,6 +115,42 @@ export default function OrderDetailPage() {
     onSuccess: invalidate,
   })
 
+  const sendEmailMutation = useMutation({
+    mutationFn: () => fetch(`/api/emails/send/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(r => {
+      if (!r.ok) throw new Error('Email failed to send')
+      return r.json()
+    }),
+    onSuccess: () => { showToast('success', 'Email sent successfully'); invalidate() },
+    onError: () => showToast('error', 'Failed to send email — check the activity log'),
+  })
+
+  const resendEmailMutation = useMutation({
+    mutationFn: () => fetch(`/api/emails/resend/${id}`, { method: 'POST' }).then(r => {
+      if (!r.ok) throw new Error('Resend failed')
+      return r.json()
+    }),
+    onSuccess: () => { showToast('success', 'Email resent successfully'); invalidate() },
+    onError: () => showToast('error', 'Failed to resend email — check the activity log'),
+  })
+
+  const approveRescanMutation = useMutation({
+    mutationFn: (folderId: string) => fetch(`/api/drive/log/${folderId}`, {
+      method: 'DELETE',
+    }).then(r => {
+      if (!r.ok) throw new Error('Approval failed')
+      return r.json()
+    }),
+    onSuccess: () => {
+      showToast('success', 'Rescan approved — watcher will reprocess on next cycle')
+      invalidate()
+    },
+    onError: () => showToast('error', 'Failed to approve rescan'),
+  })
+
   if (isLoading) return (
     <div className="p-8 text-[#444] text-sm">Loading…</div>
   )
@@ -106,15 +164,27 @@ export default function OrderDetailPage() {
     ? ((new Date(order.date_delivered).getTime() - new Date(order.created_at).getTime()) / 3600000).toFixed(1)
     : null
 
-  // Border scan state helpers
   const borderStatus = order.border_scan_status as string | null
   const hasBorderScan = order.border_scan === true
-
-  // Check if any rolls have archived twins (twin checks have been released)
   const hasArchivedTwins = order.rolls?.some((r: any) => r.status === 'archived')
+  const emailButtonLabel = getEmailButtonLabel(order)
+  const emailAlreadySent = !!(order.email_status && order.email_status !== 'failed')
+  const emailFailed = order.email_status === 'failed'
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
+
+      {/* Toast */}
+      {emailToast && (
+        <div className={clsx(
+          'fixed top-6 right-6 z-50 px-4 py-3 rounded-xl border text-sm font-medium shadow-lg',
+          emailToast.type === 'success'
+            ? 'bg-green-500/10 border-green-500/30 text-green-400'
+            : 'bg-red-500/10 border-red-500/30 text-red-400'
+        )}>
+          {emailToast.message}
+        </div>
+      )}
 
       {/* Back */}
       <button
@@ -128,6 +198,31 @@ export default function OrderDetailPage() {
 
         {/* Main column */}
         <div className="lg:col-span-2 space-y-5">
+
+          {/* ── Rescan Alert Cards ── */}
+          {rescans.map((rescan: any) => (
+            <div key={rescan.id} className="bg-yellow-500/5 border border-yellow-500/20 rounded-xl p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={15} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-yellow-400 text-sm font-medium mb-1">Rescan detected</p>
+                    <p className="text-[#666] text-xs">
+                      Folder <span className="font-mono text-[#888]">{rescan.folder_name || rescan.folder_id}</span> was
+                      detected in the Inbox again. Approve to allow the watcher to reprocess it on the next cycle.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => approveRescanMutation.mutate(rescan.folder_id)}
+                  disabled={approveRescanMutation.isPending}
+                  className="flex-shrink-0 px-3 py-1.5 bg-yellow-500/10 border border-yellow-500/30 hover:border-yellow-500/60 text-yellow-400 hover:text-yellow-300 rounded-lg text-xs transition-all disabled:opacity-40"
+                >
+                  {approveRescanMutation.isPending ? 'Approving…' : 'Approve'}
+                </button>
+              </div>
+            </div>
+          ))}
 
           {/* Order header card */}
           <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-6">
@@ -240,13 +335,12 @@ export default function OrderDetailPage() {
             )}>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  {borderStatus === 'complete' && <CheckCircle size={15} className="text-green-400" />}
-                  {borderStatus === 'failed'   && <XCircle size={15} className="text-red-400" />}
+                  {borderStatus === 'complete'   && <CheckCircle size={15} className="text-green-400" />}
+                  {borderStatus === 'failed'     && <XCircle size={15} className="text-red-400" />}
                   {borderStatus === 'processing' && <Loader2 size={15} className="text-blue-400 animate-spin" />}
-                  {!borderStatus && <RefreshCw size={15} className="text-[#555]" />}
+                  {!borderStatus                 && <RefreshCw size={15} className="text-[#555]" />}
                   <p className="text-white text-sm font-medium">Border Scans</p>
                 </div>
-
                 <span className={clsx(
                   'px-2.5 py-0.5 rounded-full text-[11px] font-medium border',
                   borderStatus === 'complete'   && 'bg-green-500/10 text-green-400 border-green-500/20',
@@ -258,14 +352,12 @@ export default function OrderDetailPage() {
                 </span>
               </div>
 
-              {/* Processing message */}
               {borderStatus === 'processing' && (
                 <p className="text-[#555] text-xs mb-3">
                   Applying film borders to your scans — this usually takes 1–3 minutes.
                 </p>
               )}
 
-              {/* Complete — show Drive link */}
               {borderStatus === 'complete' && order.bordered_scans_drive_url && (
                 <a
                   href={order.bordered_scans_drive_url}
@@ -277,7 +369,6 @@ export default function OrderDetailPage() {
                 </a>
               )}
 
-              {/* Failed — show error + retry */}
               {borderStatus === 'failed' && (
                 <div className="flex items-center justify-between">
                   <p className="text-red-400 text-xs">
@@ -339,7 +430,6 @@ export default function OrderDetailPage() {
                       Blank
                     </span>
                   )}
-                  {/* archived is internal — show as delivered to staff */}
                   <span className={clsx(
                     'px-2 py-0.5 rounded-full text-[11px] border',
                     STATUS_STYLES[roll.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]'
@@ -374,8 +464,9 @@ export default function OrderDetailPage() {
           )}
         </div>
 
-        {/* Sidebar actions */}
+        {/* Sidebar */}
         <div className="space-y-4">
+
           {/* Status actions */}
           {nextStatuses.length > 0 && (
             <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5">
@@ -395,6 +486,74 @@ export default function OrderDetailPage() {
               </div>
             </div>
           )}
+
+          {/* Email Actions */}
+          <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5 space-y-3">
+            <p className="text-[#555] text-xs uppercase tracking-wider">Email</p>
+
+            {emailButtonLabel && !emailAlreadySent && (
+              <button
+                onClick={() => sendEmailMutation.mutate()}
+                disabled={sendEmailMutation.isPending}
+                className="w-full flex items-center justify-between px-3 py-2.5 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-[#ff6600]/50 text-[#888] hover:text-white rounded-lg text-sm transition-all disabled:opacity-40"
+              >
+                <span className="flex items-center gap-2">
+                  <Mail size={13} />
+                  {sendEmailMutation.isPending ? 'Sending…' : emailButtonLabel}
+                </span>
+                <ChevronDown size={14} className="rotate-[-90deg]" />
+              </button>
+            )}
+
+            {emailFailed && (
+              <button
+                onClick={() => resendEmailMutation.mutate()}
+                disabled={resendEmailMutation.isPending}
+                className="w-full flex items-center justify-between px-3 py-2.5 bg-red-500/5 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 rounded-lg text-sm transition-all disabled:opacity-40"
+              >
+                <span className="flex items-center gap-2">
+                  <Mail size={13} />
+                  {resendEmailMutation.isPending ? 'Resending…' : 'Resend Email'}
+                </span>
+                <ChevronDown size={14} className="rotate-[-90deg]" />
+              </button>
+            )}
+
+            {emailAlreadySent && (
+              <button
+                onClick={() => resendEmailMutation.mutate()}
+                disabled={resendEmailMutation.isPending}
+                className="w-full flex items-center justify-between px-3 py-2.5 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-[#ff6600]/50 text-[#555] hover:text-[#888] rounded-lg text-sm transition-all disabled:opacity-40"
+              >
+                <span className="flex items-center gap-2">
+                  <Mail size={13} />
+                  {resendEmailMutation.isPending ? 'Resending…' : 'Resend Email'}
+                </span>
+                <ChevronDown size={14} className="rotate-[-90deg]" />
+              </button>
+            )}
+
+            <div className="space-y-2 text-xs pt-1 border-t border-[#1a1a1a]">
+              <div className="flex items-center justify-between">
+                <span className="text-[#555]">Delivery</span>
+                <span className={emailFailed ? 'text-red-400' : order.email_status ? 'text-green-400' : 'text-[#444]'}>
+                  {order.email_status || 'Not sent'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[#555]">Blank notice</span>
+                <span className={order.blank_email_status ? 'text-green-400' : 'text-[#444]'}>
+                  {order.blank_email_status || 'Not sent'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[#555]">Print ready</span>
+                <span className={order.print_ready_email_status ? 'text-green-400' : 'text-[#444]'}>
+                  {order.print_ready_email_status || 'Not sent'}
+                </span>
+              </div>
+            </div>
+          </div>
 
           {/* Admin — Reset Twin Checks */}
           {hasArchivedTwins && (
@@ -417,30 +576,6 @@ export default function OrderDetailPage() {
             </div>
           )}
 
-          {/* Email status */}
-          <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5 space-y-3">
-            <p className="text-[#555] text-xs uppercase tracking-wider">Email Status</p>
-            <div className="space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-[#555]">Delivery</span>
-                <span className={order.email_status ? 'text-green-400' : 'text-[#444]'}>
-                  {order.email_status || 'Not sent'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[#555]">Blank notice</span>
-                <span className={order.blank_email_status ? 'text-green-400' : 'text-[#444]'}>
-                  {order.blank_email_status || 'Not sent'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[#555]">Print ready</span>
-                <span className={order.print_ready_email_status ? 'text-green-400' : 'text-[#444]'}>
-                  {order.print_ready_email_status || 'Not sent'}
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
