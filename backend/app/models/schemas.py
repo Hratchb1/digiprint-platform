@@ -21,10 +21,13 @@ class OrderStatus(str, Enum):
     processing  = "processing"
     scanned     = "scanned"
     print_ready = "print_ready"
+    devready    = "devready"
+    printready  = "printready"
     delivered   = "delivered"
     blank       = "blank"
-    archived    = "archived"
     cancelled   = "cancelled"
+    # NOTE: "archived" is intentionally excluded — it is an internal roll-level
+    # status only (used for twin check release). Orders never reach archived status.
 
 
 class OrderType(str, Enum):
@@ -133,8 +136,8 @@ class RollsAddPayload(BaseModel):
     rolls: List[RollIntake]
     operator_initials: Optional[str] = None
 
-# ── Orders ─────────────────────────────────────────────────────────────────
 
+# ── Orders ─────────────────────────────────────────────────────────────────
 
 class OrderCreate(BaseModel):
     """Manual intake - staff types customer details"""

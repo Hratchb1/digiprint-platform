@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
@@ -9,6 +9,9 @@ from app.models.orm import Order, Roll, OrderEvent, Store
 from app.models.schemas import (
     OrderCreate, OrderStatusUpdate, DashboardStats
 )
+
+# Statuses that free up twin checks for reuse
+TWIN_EXPIRY_STATUSES = {"delivered", "blank", "devready", "printready"}
 
 
 class OrderService:
@@ -105,19 +108,70 @@ class OrderService:
             raise ValueError(f"Order {order_id} not found")
 
         old_status = order.status
-        order.status = update.status.value
+        new_status = update.status.value
+        order.status = new_status
 
-        if update.status.value == "delivered":
+        if new_status == "delivered":
             order.date_delivered = datetime.utcnow()
             for roll in order.rolls:
                 if roll.status not in ("blank", "archived"):
                     roll.status = "delivered"
                     roll.date_delivered = datetime.utcnow()
 
+        # --- Twin check expiry ---
+        # When an order reaches a terminal/notified status, archive all twin checks
+        # so they become available for reuse at this store.
+        if new_status in TWIN_EXPIRY_STATUSES:
+            archived_twins = []
+            for roll in order.rolls:
+                if roll.status != "archived":
+                    roll.status = "archived"
+                    archived_twins.append(roll.twin_check)
+
+            if archived_twins:
+                await self._log_event(
+                    db, order_id,
+                    event_type="twin_checks_expired",
+                    description=f"{len(archived_twins)} twin check(s) released for reuse (order reached '{new_status}')",
+                    actor_label="system",
+                    metadata={"released_twins": archived_twins, "triggered_by_status": new_status},
+                )
+
         await self._log_event(db, order_id, "status_change",
-                              f"Status changed: {old_status} to {update.status.value}",
+                              f"Status changed: {old_status} to {new_status}",
                               actor_label=actor_label,
-                              metadata={"from": old_status, "to": update.status.value})
+                              metadata={"from": old_status, "to": new_status})
+        await db.commit()
+        await db.refresh(order)
+        return order
+
+    async def reset_twin_checks(self, db: AsyncSession, order_id: UUID, actor_label: str = "system") -> Order:
+        """
+        Manually release/reset all twin checks on an order back to 'available'
+        (i.e. status = 'booked') so they can be reassigned or reused.
+        Admin-only action — exposed via POST /api/orders/{order_id}/reset-twins.
+        """
+        order = await self.get_order(db, order_id)
+        if not order:
+            raise ValueError(f"Order {order_id} not found")
+
+        reset_twins = []
+        for roll in order.rolls:
+            if roll.status == "archived":
+                # Restore to 'booked' — the neutral active state meaning "this twin is in use"
+                roll.status = "booked"
+                reset_twins.append(roll.twin_check)
+
+        if not reset_twins:
+            raise ValueError("No archived twin checks found on this order to reset")
+
+        await self._log_event(
+            db, order_id,
+            event_type="twin_checks_reset",
+            description=f"{len(reset_twins)} twin check(s) manually reset by admin",
+            actor_label=actor_label,
+            metadata={"reset_twins": reset_twins},
+        )
         await db.commit()
         await db.refresh(order)
         return order

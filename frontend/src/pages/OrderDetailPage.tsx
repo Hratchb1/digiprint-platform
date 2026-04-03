@@ -13,6 +13,8 @@ const STATUS_STYLES: Record<string, string> = {
   delivered:   'bg-green-500/10 text-green-400 border-green-500/20',
   blank:       'bg-red-500/10 text-red-400 border-red-500/20',
   print_ready: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  // archived is an internal system status — always display as delivered
+  archived:    'bg-green-500/10 text-green-400 border-green-500/20',
 }
 
 const NEXT_STATUSES: Record<string, string[]> = {
@@ -20,7 +22,14 @@ const NEXT_STATUSES: Record<string, string[]> = {
   processing:  ['scanned', 'delivered', 'cancelled'],
   scanned:     ['delivered', 'print_ready', 'cancelled'],
   print_ready: ['delivered'],
-  delivered:   ['archived'],
+  // delivered is terminal — no manual transitions after this point
+  // twin checks are released automatically by the system
+}
+
+// Roll status is internal — "archived" means twin released, display as "delivered" to staff
+function displayRollStatus(status: string): string {
+  if (status === 'archived') return 'delivered'
+  return status
 }
 
 export default function OrderDetailPage() {
@@ -76,6 +85,14 @@ export default function OrderDetailPage() {
     onSuccess: invalidate,
   })
 
+  const resetTwinsMutation = useMutation({
+    mutationFn: () => fetch(`/api/orders/${id}/reset-twins`, { method: 'POST' }).then(r => {
+      if (!r.ok) throw new Error('Reset failed')
+      return r.json()
+    }),
+    onSuccess: invalidate,
+  })
+
   if (isLoading) return (
     <div className="p-8 text-[#444] text-sm">Loading…</div>
   )
@@ -92,6 +109,9 @@ export default function OrderDetailPage() {
   // Border scan state helpers
   const borderStatus = order.border_scan_status as string | null
   const hasBorderScan = order.border_scan === true
+
+  // Check if any rolls have archived twins (twin checks have been released)
+  const hasArchivedTwins = order.rolls?.some((r: any) => r.status === 'archived')
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
@@ -319,11 +339,12 @@ export default function OrderDetailPage() {
                       Blank
                     </span>
                   )}
+                  {/* archived is internal — show as delivered to staff */}
                   <span className={clsx(
                     'px-2 py-0.5 rounded-full text-[11px] border',
                     STATUS_STYLES[roll.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]'
                   )}>
-                    {roll.status}
+                    {displayRollStatus(roll.status)}
                   </span>
                 </div>
               ))}
@@ -372,6 +393,27 @@ export default function OrderDetailPage() {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Admin — Reset Twin Checks */}
+          {hasArchivedTwins && (
+            <div className="bg-[#111] border border-[#2a2a2a] rounded-xl p-5">
+              <p className="text-[#555] text-xs uppercase tracking-wider mb-2">Admin</p>
+              <p className="text-[#444] text-xs mb-3">
+                Twin checks on this order have been released. Use this only if they need to be re-locked — e.g. if the order was marked delivered by mistake.
+              </p>
+              <button
+                onClick={() => {
+                  if (window.confirm('Reset twin checks on this order? This will re-lock the twin numbers and prevent them from being reused until this order is delivered again.')) {
+                    resetTwinsMutation.mutate()
+                  }
+                }}
+                disabled={resetTwinsMutation.isPending}
+                className="w-full px-3 py-2 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-red-500/30 text-[#555] hover:text-red-400 rounded-lg text-xs transition-all disabled:opacity-40"
+              >
+                {resetTwinsMutation.isPending ? 'Resetting…' : 'Reset Twin Checks'}
+              </button>
             </div>
           )}
 

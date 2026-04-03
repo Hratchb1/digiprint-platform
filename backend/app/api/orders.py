@@ -189,6 +189,30 @@ async def add_rolls_to_order(
     return _enrich(order)
 
 
+@router.post("/{order_id}/reset-twins", response_model=OrderRead)
+async def reset_twin_checks(
+    order_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Admin only: manually release all archived twin checks on an order back to active.
+    Use this when twin checks need to be reassigned or reused before a new order cycle.
+    """
+    # Only master_admin or store_admin can reset twin checks
+    role = current_user.get("role", "")
+    if role not in ("master_admin", "store_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required to reset twin checks")
+
+    try:
+        order = await order_service.reset_twin_checks(
+            db, order_id, actor_label=_actor(current_user)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _enrich(order)
+
+
 @router.post("/{order_id}/retry-border")
 async def retry_border_processing(
     order_id: UUID,
@@ -219,7 +243,7 @@ async def retry_border_processing(
     # Look up Drive config for this store
     from supabase import create_client
     from app.core.config import settings
-    from app.services.drive_watcher import _get_drive_service, _get_or_create_folder, STORE_PREFIXES, _build_prefix
+    from app.services.drive_watcher import _get_drive_service, _get_or_create_folder, _build_prefix
 
     client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
 
@@ -230,14 +254,7 @@ async def retry_border_processing(
     if not config_result.data:
         raise HTTPException(status_code=500, detail="No Drive config found for this store")
 
-    config = config_result.data[0]
-
-    # Reset status to processing
-    from datetime import datetime
-    await db.execute(
-        select(Order).where(Order.id == order_id)
-    )
-    # Use raw supabase update for the new columns (not yet in SQLAlchemy session)
+    # Reset status to None via Supabase HTTP client (these columns not in SQLAlchemy session)
     client.table("orders").update({
         "border_scan_status": None,
         "bordered_scans_drive_url": None,
@@ -253,7 +270,6 @@ async def retry_border_processing(
     }).execute()
 
     # Reconstruct the order folder Drive ID from the existing drive_order_folder_url
-    # The URL format is: https://drive.google.com/drive/folders/{folder_id}
     drive_url = order.drive_order_folder_url or ""
     order_folder_id = drive_url.rstrip("/").split("/")[-1] if drive_url else None
 
@@ -309,11 +325,19 @@ async def get_events(
 
 
 def _enrich(order: Order) -> dict:
-    """Add store_name and border scan fields to order dict for frontend."""
+    """Add store_name, order_date, and border scan fields to order dict for frontend."""
+
+    # Pull order_date from pronto_order_summary if available via order.order_date,
+    # otherwise fall back to None. The field is populated by Pronto sync.
+    order_date = None
+    if hasattr(order, "order_date") and order.order_date:
+        order_date = order.order_date.isoformat() if hasattr(order.order_date, "isoformat") else str(order.order_date)
+
     return {
         "id": str(order.id),
         "order_number": order.order_number,
         "order_type": order.order_type,
+        "order_date": order_date,           # Fix 4 — was missing, caused — on Orders page
         "status": order.status,
         "customer_name": order.customer_name,
         "customer_email": order.customer_email,
