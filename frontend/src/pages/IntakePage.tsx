@@ -13,6 +13,16 @@ const TERRITORY_STORE_MAP: Record<string, string> = {
   PARR: "87ed3978-0d69-4acd-89f5-8e60dd121165",
 };
 
+// Named store list for the manual entry store selector
+const STORE_OPTIONS = [
+  { id: "a90c273e-49ff-4733-b709-31066f2ec503", name: "Bondi" },
+  { id: "514d0eee-b807-45bd-96bd-eda630be1fba", name: "Brisbane" },
+  { id: "8a525dc4-c1c2-48a0-a315-c03082b63f3e", name: "Cannington" },
+  { id: "f2635a53-93ca-499f-aad4-4eb5e7f9128c", name: "Melbourne" },
+  { id: "ff8bdc2e-966b-4a49-80b2-af5030148095", name: "Miranda" },
+  { id: "87ed3978-0d69-4acd-89f5-8e60dd121165", name: "Parramatta" },
+];
+
 const SERVICE_TYPE_MAP: Record<string, string> = {
   "Develop only":           "Dev only",
   "Develop + Scan":         "Dev+Scan",
@@ -20,6 +30,20 @@ const SERVICE_TYPE_MAP: Record<string, string> = {
   "Scan only":              "Scan only",
   "Print only":             "Print only",
 };
+
+function getCurrentUserInfo(): { store_id: string | null; role: string } {
+  try {
+    const token = localStorage.getItem("token");
+    if (!token) return { store_id: null, role: "" };
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return {
+      store_id: payload.store_id || null,
+      role: payload.role || "",
+    };
+  } catch {
+    return { store_id: null, role: "" };
+  }
+}
 
 interface TwinEntry {
   twin: string;
@@ -34,6 +58,7 @@ interface ExistingOrderInfo {
   status: string;
   created_at: string;
   operator: string;
+  manual_entry?: boolean;
   rolls: { twin_check: string; service_type: string; status: string }[];
 }
 
@@ -42,9 +67,19 @@ interface LastBooked {
   customerName: string;
   rollCount: number;
   action: "new" | "added";
+  manual?: boolean;
 }
 
-type IntakeStep = "operator" | "lookup" | "confirm" | "twins" | "done";
+interface ManualOrderData {
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  account: string;
+  service_type: string;
+  store_id: string;
+}
+
+type IntakeStep = "operator" | "lookup" | "manual" | "confirm" | "twins" | "done";
 type DupAction = "add" | "new" | null;
 
 // ── Validation ───────────────────────────────────────────────
@@ -99,6 +134,8 @@ function buildRange(first: string, last: string): string[] {
 
 export default function IntakePage() {
   const { lookup, order, loading: lookupLoading, error: lookupError, clear } = useProntoLookup();
+  const userInfo = getCurrentUserInfo();
+  const isMasterAdmin = userInfo.role === "master_admin";
 
   const [operatorInitials, setOperatorInitials] = useState<string>(
     () => sessionStorage.getItem("operator_initials") || ""
@@ -113,16 +150,23 @@ export default function IntakePage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Last booked banner
   const [lastBooked, setLastBooked] = useState<LastBooked | null>(null);
 
-  // Duplicate order state
   const [existingOrder, setExistingOrder] = useState<ExistingOrderInfo | null>(null);
   const [dupAction, setDupAction] = useState<DupAction>(null);
   const [showDupModal, setShowDupModal] = useState(false);
-  const [checkingDup, setCheckingDup] = useState(false);
 
-  // Twin entry
+  const [isManualEntry, setIsManualEntry] = useState(false);
+  const [manualData, setManualData] = useState<ManualOrderData>({
+    customer_name: "",
+    customer_email: "",
+    customer_phone: "",
+    account: "",
+    service_type: "Develop + Scan",
+    store_id: userInfo.store_id || "",
+  });
+  const [manualErrors, setManualErrors] = useState<Record<string, string>>({});
+
   const [twinMode, setTwinMode] = useState<"single" | "range">("single");
   const [singleInput, setSingleInput] = useState("");
   const [singleError, setSingleError] = useState<string | null>(null);
@@ -135,10 +179,12 @@ export default function IntakePage() {
   const singleTwinRef    = useRef<HTMLInputElement>(null);
   const firstTwinRef     = useRef<HTMLInputElement>(null);
   const lastTwinRef      = useRef<HTMLInputElement>(null);
+  const customerNameRef  = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (step === "operator") setTimeout(() => operatorInputRef.current?.focus(), 50);
     if (step === "lookup")   setTimeout(() => orderInputRef.current?.focus(), 50);
+    if (step === "manual")   setTimeout(() => customerNameRef.current?.focus(), 50);
     if (step === "twins")    setTimeout(() => {
       if (twinMode === "single") singleTwinRef.current?.focus();
       else firstTwinRef.current?.focus();
@@ -148,57 +194,6 @@ export default function IntakePage() {
   useEffect(() => {
     if (order && step === "lookup") {
       setServiceType(order.inferred_service_type);
-      setStep("confirm");
-    }
-  }, [order]);
-
-  // ── Operator ─────────────────────────────────────────────
-  const handleOperatorSubmit = () => {
-    const val = operatorInput.trim().toUpperCase();
-    if (!val) { setOperatorError("Please enter your initials."); return; }
-    if (val.length > 5) { setOperatorError("Initials too long (max 5 characters)."); return; }
-    sessionStorage.setItem("operator_initials", val);
-    setOperatorInitials(val);
-    setStep("lookup");
-  };
-
-  // ── Order lookup with duplicate check ────────────────────
-  const handleOrderLookup = useCallback(async () => {
-    if (!orderInput.trim() || !order) return;
-
-    const storeId = TERRITORY_STORE_MAP[order.territory];
-    if (!storeId) return;
-
-    setCheckingDup(true);
-    try {
-      const { data } = await api.get("/orders/check/order-number", {
-        params: { order_number: orderInput.trim(), store_id: storeId }
-      });
-      if (data.exists) {
-        setExistingOrder(data.order);
-        setShowDupModal(true);
-      } else {
-        setStep("twins");
-      }
-    } catch {
-      // If check fails, proceed normally
-      setStep("twins");
-    } finally {
-      setCheckingDup(false);
-    }
-  }, [orderInput, order]);
-
-  // When Pronto lookup completes, then check for duplicates
-  const handleInitialLookup = useCallback(async () => {
-    if (!orderInput.trim()) return;
-    await lookup(orderInput.trim());
-  }, [orderInput, lookup]);
-
-  // After order loads, check for duplicates then go to confirm
-  useEffect(() => {
-    if (order && step === "lookup") {
-      setServiceType(order.inferred_service_type);
-      // Check for duplicate order at store level
       const storeId = TERRITORY_STORE_MAP[order.territory];
       if (storeId) {
         api.get("/orders/check/order-number", {
@@ -218,12 +213,67 @@ export default function IntakePage() {
     }
   }, [order]);
 
-  const handleDupChoice = (action: "add" | "new" | "cancel") => {
-    setShowDupModal(false);
-    if (action === "cancel") {
-      handleClear();
+  const handleOperatorSubmit = () => {
+    const val = operatorInput.trim().toUpperCase();
+    if (!val) { setOperatorError("Please enter your initials."); return; }
+    if (val.length > 5) { setOperatorError("Initials too long (max 5 characters)."); return; }
+    sessionStorage.setItem("operator_initials", val);
+    setOperatorInitials(val);
+    setStep("lookup");
+  };
+
+  const handleInitialLookup = useCallback(async () => {
+    if (!orderInput.trim()) return;
+    setIsManualEntry(false);
+    await lookup(orderInput.trim());
+  }, [orderInput, lookup]);
+
+  const handleEnterManually = useCallback(async () => {
+    if (!orderInput.trim()) return;
+
+    // Check for duplicate before going to manual form
+    const storeId = userInfo.store_id || manualData.store_id;
+    if (storeId) {
+      try {
+        const { data } = await api.get("/orders/check/order-number", {
+          params: { order_number: orderInput.trim(), store_id: storeId }
+        });
+        if (data.exists) {
+          setExistingOrder(data.order);
+          setShowDupModal(true);
+        }
+      } catch { /* proceed */ }
+    }
+
+    setIsManualEntry(true);
+    setManualData(prev => ({
+      ...prev,
+      store_id: userInfo.store_id || prev.store_id || "",
+      service_type: "Develop + Scan",
+    }));
+    setStep("manual");
+  }, [orderInput, userInfo.store_id, manualData.store_id]);
+
+  const handleManualConfirm = () => {
+    const errors: Record<string, string> = {};
+    if (!manualData.customer_name.trim()) {
+      errors.customer_name = "Customer name is required";
+    }
+    // store_id required only if master_admin (staff always have one from JWT)
+    if (isMasterAdmin && !manualData.store_id) {
+      errors.store_id = "Please select a store";
+    }
+    if (Object.keys(errors).length > 0) {
+      setManualErrors(errors);
       return;
     }
+    setManualErrors({});
+    setStep("twins");
+  };
+
+  const handleDupChoice = (action: "add" | "new" | "cancel") => {
+    setShowDupModal(false);
+    if (action === "cancel") { handleClear(); return; }
     setDupAction(action);
     setStep("twins");
   };
@@ -242,10 +292,19 @@ export default function IntakePage() {
     setExistingOrder(null);
     setDupAction(null);
     setShowDupModal(false);
+    setIsManualEntry(false);
+    setManualData({
+      customer_name: "",
+      customer_email: "",
+      customer_phone: "",
+      account: "",
+      service_type: "Develop + Scan",
+      store_id: userInfo.store_id || "",
+    });
+    setManualErrors({});
     setStep("lookup");
   };
 
-  // ── Add twins ─────────────────────────────────────────────
   const addTwins = useCallback(async (twinList: string[]) => {
     const existingInSession = new Set(twins.map((t) => t.twin));
     const sessionDups = twinList.filter((t) => existingInSession.has(t));
@@ -258,10 +317,12 @@ export default function IntakePage() {
 
     let storeDups: string[] = [];
     try {
-      const storeId = order?.territory ? TERRITORY_STORE_MAP[order.territory] : undefined;
+      const storeId = isManualEntry
+        ? manualData.store_id
+        : order?.territory ? TERRITORY_STORE_MAP[order.territory] : undefined;
       const { data } = await api.post("/rolls/check-twins", { twins: twinList, store_id: storeId });
       storeDups = data.duplicates || [];
-    } catch { /* endpoint not built yet */ }
+    } catch { /* endpoint may not exist */ }
 
     const entries: TwinEntry[] = twinList.map((twin) => ({
       twin,
@@ -269,7 +330,7 @@ export default function IntakePage() {
       message: storeDups.includes(twin) ? "Already in use at this store" : undefined,
     }));
     setTwins((prev) => [...prev, ...entries]);
-  }, [twins, order, twinMode]);
+  }, [twins, order, twinMode, isManualEntry, manualData.store_id]);
 
   const handleSingleSubmit = useCallback(async () => {
     const raw = singleInput.trim();
@@ -293,55 +354,104 @@ export default function IntakePage() {
     firstTwinRef.current?.focus();
   }, [firstTwin, lastTwin, addTwins]);
 
-  // ── Save order ────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    if (!order) return;
     const validTwins = twins.filter((t) => t.status === "ok");
     if (validTwins.length === 0) { setSaveError("No valid twin checks to save."); return; }
-
-    const storeId = TERRITORY_STORE_MAP[order.territory];
-    if (!storeId) { setSaveError(`Unknown store territory: ${order.territory}`); return; }
-
-    const backendServiceType = SERVICE_TYPE_MAP[serviceType] || serviceType;
-    const rollsPayload = validTwins.map((t) => ({ twin_check: t.twin, service_type: backendServiceType }));
 
     setSaving(true);
     setSaveError(null);
 
     try {
-      if (dupAction === "add" && existingOrder) {
-        // Add rolls to existing order
-        await api.post(`/orders/${existingOrder.id}/add-rolls`, {
-          rolls: rollsPayload,
-          operator_initials: operatorInitials || null,
-        });
-        setLastBooked({
-          orderNum: order.sales_order_number,
-          customerName: order.customer_name,
-          rollCount: validTwins.length,
-          action: "added",
-        });
-      } else {
-        // New order — with suffix if "new booking" on duplicate
-        const orderNumber = dupAction === "new"
-          ? `${order.sales_order_number}-B`
-          : order.sales_order_number;
+      if (isManualEntry) {
+        const storeId = manualData.store_id || userInfo.store_id;
+        if (!storeId) { setSaveError("No store selected."); setSaving(false); return; }
 
-        await api.post("/orders", {
-          order_number:      orderNumber,
-          store_id:          storeId,
-          customer_name:     order.customer_name,
-          customer_email:    order.email_address || null,
-          account:           order.pronto_account || null,
-          operator_initials: operatorInitials || null,
-          rolls:             rollsPayload,
-        });
-        setLastBooked({
-          orderNum: orderNumber,
-          customerName: order.customer_name,
-          rollCount: validTwins.length,
-          action: "new",
-        });
+        const backendServiceType = SERVICE_TYPE_MAP[manualData.service_type] || manualData.service_type;
+        const rollsPayload = validTwins.map((t) => ({
+          twin_check: t.twin,
+          service_type: backendServiceType,
+        }));
+
+        if (dupAction === "add" && existingOrder) {
+          await api.post(`/orders/${existingOrder.id}/add-rolls`, {
+            rolls: rollsPayload,
+            operator_initials: operatorInitials || null,
+          });
+          setLastBooked({
+            orderNum: orderInput.trim(),
+            customerName: manualData.customer_name,
+            rollCount: validTwins.length,
+            action: "added",
+            manual: true,
+          });
+        } else {
+          const orderNumber = dupAction === "new"
+            ? `${orderInput.trim()}-B`
+            : orderInput.trim();
+
+          await api.post("/orders", {
+            order_number:      orderNumber,
+            store_id:          storeId,
+            customer_name:     manualData.customer_name,
+            customer_email:    manualData.customer_email || null,
+            customer_phone:    manualData.customer_phone || null,
+            account:           manualData.account || null,
+            operator_initials: operatorInitials || null,
+            manual_entry:      true,
+            rolls:             rollsPayload,
+          });
+          setLastBooked({
+            orderNum: orderNumber,
+            customerName: manualData.customer_name,
+            rollCount: validTwins.length,
+            action: "new",
+            manual: true,
+          });
+        }
+      } else {
+        if (!order) return;
+        const storeId = TERRITORY_STORE_MAP[order.territory];
+        if (!storeId) { setSaveError(`Unknown store territory: ${order.territory}`); return; }
+
+        const backendServiceType = SERVICE_TYPE_MAP[serviceType] || serviceType;
+        const rollsPayload = validTwins.map((t) => ({
+          twin_check: t.twin,
+          service_type: backendServiceType,
+        }));
+
+        if (dupAction === "add" && existingOrder) {
+          await api.post(`/orders/${existingOrder.id}/add-rolls`, {
+            rolls: rollsPayload,
+            operator_initials: operatorInitials || null,
+          });
+          setLastBooked({
+            orderNum: order.sales_order_number,
+            customerName: order.customer_name,
+            rollCount: validTwins.length,
+            action: "added",
+          });
+        } else {
+          const orderNumber = dupAction === "new"
+            ? `${order.sales_order_number}-B`
+            : order.sales_order_number;
+
+          await api.post("/orders", {
+            order_number:      orderNumber,
+            store_id:          storeId,
+            customer_name:     order.customer_name,
+            customer_email:    order.email_address || null,
+            account:           order.pronto_account || null,
+            operator_initials: operatorInitials || null,
+            manual_entry:      false,
+            rolls:             rollsPayload,
+          });
+          setLastBooked({
+            orderNum: orderNumber,
+            customerName: order.customer_name,
+            rollCount: validTwins.length,
+            action: "new",
+          });
+        }
       }
       setStep("done");
     } catch (err: any) {
@@ -350,7 +460,7 @@ export default function IntakePage() {
     } finally {
       setSaving(false);
     }
-  }, [order, twins, serviceType, operatorInitials, dupAction, existingOrder]);
+  }, [order, twins, serviceType, operatorInitials, dupAction, existingOrder, isManualEntry, manualData, orderInput, userInfo.store_id]);
 
   const removeTwin = (twin: string) => setTwins((prev) => prev.filter((t) => t.twin !== twin));
 
@@ -409,7 +519,12 @@ export default function IntakePage() {
             <h2 className="text-2xl font-bold text-white">
               {lastBooked?.action === "added" ? "Rolls added" : "Order booked"}
             </h2>
-            <p className="text-gray-400 mt-1">
+            {lastBooked?.manual && (
+              <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-medium text-orange-300 border border-orange-500/30" style={{ backgroundColor: "#431a00" }}>
+                Manual entry
+              </span>
+            )}
+            <p className="text-gray-400 mt-2">
               {lastBooked?.customerName} — {lastBooked?.rollCount} roll{lastBooked?.rollCount !== 1 ? "s" : ""} checked in
             </p>
             <p className="text-gray-500 text-sm mt-1">#{lastBooked?.orderNum}</p>
@@ -429,6 +544,15 @@ export default function IntakePage() {
               setServiceType("Develop + Scan");
               setExistingOrder(null);
               setDupAction(null);
+              setIsManualEntry(false);
+              setManualData({
+                customer_name: "",
+                customer_email: "",
+                customer_phone: "",
+                account: "",
+                service_type: "Develop + Scan",
+                store_id: userInfo.store_id || "",
+              });
               setStep("lookup");
             }}
             className="w-full py-3 px-6 rounded-lg font-semibold text-white"
@@ -452,6 +576,7 @@ export default function IntakePage() {
             <p className="text-xs text-green-400 uppercase tracking-wide">Last booked</p>
             <p className="text-sm text-white font-medium">
               #{lastBooked.orderNum} — {lastBooked.customerName}
+              {lastBooked.manual && <span className="ml-2 text-xs text-orange-400">(manual)</span>}
             </p>
             <p className="text-xs text-green-400">
               {lastBooked.rollCount} roll{lastBooked.rollCount !== 1 ? "s" : ""} · {lastBooked.action === "added" ? "Added to existing" : "New order"}
@@ -475,6 +600,11 @@ export default function IntakePage() {
             <span className="text-amber-400 text-xl">⚠</span>
             <div>
               <p className="text-amber-400 font-semibold">Order already exists</p>
+              {existingOrder.manual_entry && (
+                <span className="inline-block mb-1 px-2 py-0.5 rounded text-xs font-medium text-orange-300 border border-orange-500/30" style={{ backgroundColor: "#431a00" }}>
+                  Was entered manually
+                </span>
+              )}
               <p className="text-sm text-gray-300 mt-1">
                 <span className="font-medium text-white">{existingOrder.customer_name}</span> — booked {new Date(existingOrder.created_at).toLocaleString("en-AU", { dateStyle: "short", timeStyle: "short" })}
                 {existingOrder.operator ? ` by ${existingOrder.operator}` : ""}
@@ -486,32 +616,20 @@ export default function IntakePage() {
           </div>
           <p className="text-sm text-gray-300 font-medium">What do you want to do?</p>
           <div className="space-y-2">
-            <button
-              onClick={() => handleDupChoice("add")}
-              className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left"
-              style={{ backgroundColor: "#374151" }}
-            >
+            <button onClick={() => handleDupChoice("add")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#374151" }}>
               ➕ Add more rolls — attach new twins to this order
             </button>
-            <button
-              onClick={() => handleDupChoice("new")}
-              className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left"
-              style={{ backgroundColor: "#374151" }}
-            >
-              📋 New booking — create separate booking as {order?.sales_order_number}-B
+            <button onClick={() => handleDupChoice("new")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#374151" }}>
+              📋 New booking — create separate booking as {orderInput.trim()}-B
             </button>
-            <button
-              onClick={() => handleDupChoice("cancel")}
-              className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-400 text-left border border-gray-700"
-              style={{ backgroundColor: "#111827" }}
-            >
+            <button onClick={() => handleDupChoice("cancel")} className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-400 text-left border border-gray-700" style={{ backgroundColor: "#111827" }}>
               ✕ Cancel — go back
             </button>
           </div>
         </div>
       )}
 
-      {/* Order number */}
+      {/* Order number input */}
       {!showDupModal && (
         <div className="space-y-2">
           <label className="block text-sm font-medium text-gray-300">Pronto order number</label>
@@ -538,21 +656,153 @@ export default function IntakePage() {
               </button>
             )}
             {step !== "lookup" && (
-              <button
-                onClick={handleClear}
-                className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-gray-600"
-                style={{ backgroundColor: "#1f2937" }}
-              >
+              <button onClick={handleClear} className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-gray-600" style={{ backgroundColor: "#1f2937" }}>
                 Change
               </button>
             )}
           </div>
-          {lookupError && <p className="text-sm text-red-400">{lookupError}</p>}
+
+          {/* Not found — offer manual entry */}
+          {lookupError && step === "lookup" && (
+            <div className="rounded-lg border border-gray-700 p-4 space-y-3" style={{ backgroundColor: "#111827" }}>
+              <p className="text-sm text-red-400">{lookupError}</p>
+              <p className="text-xs text-gray-500">
+                Order not found in Pronto. If the system is unavailable, you can enter the order manually.
+              </p>
+              <button
+                onClick={handleEnterManually}
+                disabled={!orderInput.trim()}
+                className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white disabled:opacity-40 border border-orange-500/40"
+                style={{ backgroundColor: "#431a00" }}
+              >
+                ✏️ Enter manually
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Order summary */}
-      {order && (step === "confirm" || step === "twins") && !showDupModal && (
+      {/* Manual entry form */}
+      {step === "manual" && !showDupModal && (
+        <div className="rounded-xl border border-orange-500/20 p-5 space-y-4" style={{ backgroundColor: "#1a1200" }}>
+          <div className="flex items-center gap-2">
+            <span className="text-orange-400 text-sm">✏️</span>
+            <p className="text-orange-400 text-sm font-semibold">Manual entry — order {orderInput.trim()}</p>
+          </div>
+          <p className="text-xs text-gray-500">
+            This order will be flagged as manually entered. When Pronto syncs, you'll be notified if the order already exists.
+          </p>
+
+          {/* Store selector — only shown for master_admin */}
+          {isMasterAdmin && (
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-gray-400">Store <span className="text-red-400">*</span></label>
+              <select
+                value={manualData.store_id}
+                onChange={(e) => setManualData(prev => ({ ...prev, store_id: e.target.value }))}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                style={{ backgroundColor: "#1f2937" }}
+              >
+                <option value="">Select a store…</option>
+                {STORE_OPTIONS.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              {manualErrors.store_id && <p className="text-xs text-red-400">{manualErrors.store_id}</p>}
+            </div>
+          )}
+
+          {/* Customer name */}
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-400">Customer name <span className="text-red-400">*</span></label>
+            <input
+              ref={customerNameRef}
+              type="text"
+              value={manualData.customer_name}
+              onChange={(e) => setManualData(prev => ({ ...prev, customer_name: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && handleManualConfirm()}
+              placeholder="e.g. John Smith"
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+            {manualErrors.customer_name && <p className="text-xs text-red-400">{manualErrors.customer_name}</p>}
+          </div>
+
+          {/* Email */}
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-400">Email <span className="text-gray-600">(optional)</span></label>
+            <input
+              type="email"
+              value={manualData.customer_email}
+              onChange={(e) => setManualData(prev => ({ ...prev, customer_email: e.target.value }))}
+              placeholder="e.g. john@email.com"
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+          </div>
+
+          {/* Phone */}
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-400">Phone <span className="text-gray-600">(optional)</span></label>
+            <input
+              type="tel"
+              value={manualData.customer_phone}
+              onChange={(e) => setManualData(prev => ({ ...prev, customer_phone: e.target.value }))}
+              placeholder="e.g. 0412 345 678"
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+          </div>
+
+          {/* Account */}
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-400">Account number <span className="text-gray-600">(optional)</span></label>
+            <input
+              type="text"
+              value={manualData.account}
+              onChange={(e) => setManualData(prev => ({ ...prev, account: e.target.value }))}
+              placeholder="e.g. 1429084"
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              style={{ backgroundColor: "#1f2937" }}
+            />
+          </div>
+
+          {/* Service type */}
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-400">Service type</label>
+            <select
+              value={manualData.service_type}
+              onChange={(e) => setManualData(prev => ({ ...prev, service_type: e.target.value }))}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              style={{ backgroundColor: "#1f2937" }}
+            >
+              {Object.keys(SERVICE_TYPE_MAP).map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleManualConfirm}
+              className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white"
+              style={{ backgroundColor: "#f97316" }}
+            >
+              Confirm & enter twins
+            </button>
+            <button
+              onClick={handleClear}
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 border border-gray-700"
+              style={{ backgroundColor: "#111827" }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Pronto order summary */}
+      {order && (step === "confirm" || step === "twins") && !showDupModal && !isManualEntry && (
         <ProntoOrderSummary
           order={order}
           serviceType={serviceType}
@@ -562,6 +812,23 @@ export default function IntakePage() {
           dupAction={dupAction}
           existingOrderRollCount={existingOrder?.rolls?.length}
         />
+      )}
+
+      {/* Manual order summary (confirmed) */}
+      {isManualEntry && step === "twins" && !showDupModal && (
+        <div className="rounded-xl border border-orange-500/20 p-4" style={{ backgroundColor: "#1a1200" }}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-orange-400 text-xs font-semibold uppercase tracking-wide">Manual entry</p>
+            <button onClick={() => setStep("manual")} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
+          </div>
+          <p className="text-white font-medium">{manualData.customer_name}</p>
+          {manualData.customer_email && <p className="text-gray-400 text-sm">{manualData.customer_email}</p>}
+          {manualData.customer_phone && <p className="text-gray-400 text-sm">{manualData.customer_phone}</p>}
+          <p className="text-gray-500 text-xs mt-1">{manualData.service_type}</p>
+          {isMasterAdmin && manualData.store_id && (
+            <p className="text-gray-500 text-xs">{STORE_OPTIONS.find(s => s.id === manualData.store_id)?.name}</p>
+          )}
+        </div>
       )}
 
       {/* Twin entry */}

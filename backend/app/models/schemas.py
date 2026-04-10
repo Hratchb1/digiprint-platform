@@ -5,7 +5,7 @@ from uuid import UUID
 from enum import Enum
 
 
-# ── Enums (mirror DB constraints) ──────────────────────────────────────────
+# ── Enums ──────────────────────────────────────────────────────────────────
 
 class ServiceType(str, Enum):
     dev_only        = "Dev only"
@@ -26,8 +26,7 @@ class OrderStatus(str, Enum):
     delivered   = "delivered"
     blank       = "blank"
     cancelled   = "cancelled"
-    # NOTE: "archived" is intentionally excluded — it is an internal roll-level
-    # status only (used for twin check release). Orders never reach archived status.
+    # NOTE: "archived" is intentionally excluded — internal roll-level status only
 
 
 class OrderType(str, Enum):
@@ -145,11 +144,13 @@ class OrderCreate(BaseModel):
     store_id: UUID
     customer_name: str
     customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
     account: Optional[str] = None
     order_type: OrderType = OrderType.film
     rolls: List[RollIntake]
     operator_initials: Optional[str] = None
     notes: Optional[str] = None
+    manual_entry: bool = False  # True when booked without Pronto lookup
 
     @field_validator("order_number")
     @classmethod
@@ -187,6 +188,7 @@ class OrderRead(BaseModel):
     drive_order_folder_url: Optional[str]
     is_print_only: bool
     has_blanks: bool
+    manual_entry: bool = False
     # Border / addon scan flags
     border_scan: bool = False
     contact_sheet: bool = False
@@ -219,6 +221,7 @@ class OrderSummary(BaseModel):
     delivered_rolls: int
     has_blanks: bool
     is_print_only: bool
+    manual_entry: bool = False
     drive_order_folder_url: Optional[str]
     created_at: datetime
     date_delivered: Optional[datetime]

@@ -195,11 +195,7 @@ async def reset_twin_checks(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Admin only: manually release all archived twin checks on an order back to active.
-    Use this when twin checks need to be reassigned or reused before a new order cycle.
-    """
-    # Only master_admin or store_admin can reset twin checks
+    """Admin only: manually re-lock archived twin checks on an order."""
     role = current_user.get("role", "")
     if role not in ("master_admin", "store_admin"):
         raise HTTPException(status_code=403, detail="Admin access required to reset twin checks")
@@ -219,10 +215,7 @@ async def retry_border_processing(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Retry border processing for an order that previously failed.
-    Resets border_scan_status to None and re-queues the processing job.
-    """
+    """Retry border processing for an order that previously failed."""
     order = await order_service.get_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -233,17 +226,15 @@ async def retry_border_processing(
     if order.border_scan_status == "processing":
         raise HTTPException(status_code=400, detail="Border processing is already in progress")
 
-    # Find the first scanned roll to get twin/folder info
     scanned_rolls = [r for r in (order.rolls or []) if r.drive_folder_url]
     if not scanned_rolls:
         raise HTTPException(status_code=400, detail="No scanned rolls found — cannot locate source images")
 
     roll = scanned_rolls[0]
 
-    # Look up Drive config for this store
     from supabase import create_client
     from app.core.config import settings
-    from app.services.drive_watcher import _get_drive_service, _get_or_create_folder, _build_prefix
+    from app.services.drive_watcher import _get_drive_service, _build_prefix
 
     client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
 
@@ -254,13 +245,11 @@ async def retry_border_processing(
     if not config_result.data:
         raise HTTPException(status_code=500, detail="No Drive config found for this store")
 
-    # Reset status to None via Supabase HTTP client (these columns not in SQLAlchemy session)
     client.table("orders").update({
         "border_scan_status": None,
         "bordered_scans_drive_url": None,
     }).eq("id", str(order_id)).execute()
 
-    # Log the retry
     client.table("order_events").insert({
         "order_id": str(order_id),
         "event_type": "border_scan_retry",
@@ -269,18 +258,20 @@ async def retry_border_processing(
         "metadata": {},
     }).execute()
 
-    # Reconstruct the order folder Drive ID from the existing drive_order_folder_url
     drive_url = order.drive_order_folder_url or ""
     order_folder_id = drive_url.rstrip("/").split("/")[-1] if drive_url else None
 
     if not order_folder_id:
         raise HTTPException(status_code=400, detail="Cannot determine Drive folder ID from order")
 
-    # Build folder name (prefixed twin) from first scanned roll
     folder_name = _build_prefix(roll.twin_check, str(order.store_id))
 
-    # Fire the background task
     from app.services.drive_watcher import _run_border_processing
+    from pathlib import Path
+    config = config_result.data[0]
+    film_scans_root = Path(config.get("film_scans_root") or "D:/Film Scans")
+    border_processing_root = Path(config.get("border_processing_root") or "D:/Border Processing")
+
     service = _get_drive_service()
     asyncio.create_task(
         _run_border_processing(
@@ -291,6 +282,8 @@ async def retry_border_processing(
             order_folder_id=order_folder_id,
             folder_name=folder_name,
             twin_check=roll.twin_check,
+            film_scans_root=film_scans_root,
+            border_processing_root=border_processing_root,
         )
     )
 
@@ -325,10 +318,7 @@ async def get_events(
 
 
 def _enrich(order: Order) -> dict:
-    """Add store_name, order_date, and border scan fields to order dict for frontend."""
-
-    # Pull order_date from pronto_order_summary if available via order.order_date,
-    # otherwise fall back to None. The field is populated by Pronto sync.
+    """Serialize order to dict for frontend."""
     order_date = None
     if hasattr(order, "order_date") and order.order_date:
         order_date = order.order_date.isoformat() if hasattr(order.order_date, "isoformat") else str(order.order_date)
@@ -337,7 +327,7 @@ def _enrich(order: Order) -> dict:
         "id": str(order.id),
         "order_number": order.order_number,
         "order_type": order.order_type,
-        "order_date": order_date,           # Fix 4 — was missing, caused — on Orders page
+        "order_date": order_date,
         "status": order.status,
         "customer_name": order.customer_name,
         "customer_email": order.customer_email,
@@ -351,6 +341,7 @@ def _enrich(order: Order) -> dict:
         "drive_order_folder_url": order.drive_order_folder_url,
         "is_print_only": order.is_print_only,
         "has_blanks": order.has_blanks,
+        "manual_entry": order.manual_entry or False,
         # Border scan fields
         "border_scan": order.border_scan or False,
         "contact_sheet": order.contact_sheet or False,

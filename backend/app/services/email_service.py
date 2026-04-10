@@ -1,251 +1,394 @@
-# app/services/email_service.py
-# ============================================================
-# Gmail SMTP email service — renders Jinja2 templates and
-# sends customer notification emails per store credentials.
-# Logs all sends to the email_log table.
-# ============================================================
-
-import logging
 import smtplib
-from datetime import datetime
+import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from datetime import datetime, timedelta
 from typing import Optional
-
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-import os
-
 from supabase import create_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Template directory ───────────────────────────────────────
-TEMPLATE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "app", "templates", "email"
-)
-
+# ---------------------------------------------------------------------------
+# Jinja2 environment
+# ---------------------------------------------------------------------------
 jinja_env = Environment(
-    loader=FileSystemLoader(TEMPLATE_DIR),
-    autoescape=select_autoescape(["html"]),
+    loader=FileSystemLoader("app/templates/email"),
+    autoescape=select_autoescape(["html"])
 )
 
+# ---------------------------------------------------------------------------
+# Template routing
+# ---------------------------------------------------------------------------
+TEMPLATE_MAP = {
+    "scans_ready":           "scans_ready.html",
+    "prints_and_scans_ready": "prints_and_scans_ready.html",
+    "prints_ready":          "prints_ready.html",
+    "negatives_ready":       "negatives_ready.html",
+    "blank_notification":    "blank_notification.html",
+}
 
-def _first_name(full_name: str) -> str:
-    """Extract first name from full name."""
-    if not full_name:
+SUBJECT_MAP = {
+    "scans_ready":            "Your film scans are ready, {first_name} | Order {order_number}",
+    "prints_and_scans_ready": "Your prints and scans are ready, {first_name} | Order {order_number}",
+    "prints_ready":           "Your prints are ready for collection | Order {order_number}",
+    "negatives_ready":        "Your negatives are ready — Order {order_number}",
+    "blank_notification":     "{first_name}, an update on your recent order {order_number}",
+}
+
+# ---------------------------------------------------------------------------
+# Helper — name formatting
+# ---------------------------------------------------------------------------
+def _title_name(name: Optional[str]) -> str:
+    """Always render customer name in Title Case regardless of source format."""
+    if not name:
         return "there"
-    return full_name.strip().split()[0]
+    return name.strip().title()
 
 
-def _select_template(order_type: str, has_blanks: bool, all_blank: bool) -> str:
-    """
-    Select the correct email template based on order service type.
-    Returns template filename.
-    """
-    if all_blank:
-        return "blank_notification.html"
-
-    order_type = (order_type or "").strip()
-
-    if order_type == "Dev+Scan+Print":
-        return "prints_and_scans_ready.html"
-    elif order_type == "Dev+Scan":
-        return "scans_ready.html"
-    elif order_type == "Dev only":
-        return "negatives_ready.html"
-    elif order_type == "Print only":
-        return "prints_ready.html"
-    elif order_type == "Scan only":
-        return "scans_ready.html"
-    else:
-        return "scans_ready.html"
+# ---------------------------------------------------------------------------
+# Helper — expiry date string
+# ---------------------------------------------------------------------------
+def _expiry_str(base_date: datetime, days: int) -> str:
+    """Return a human-readable expiry date string."""
+    expiry = base_date + timedelta(days=days)
+    return expiry.strftime("%-d %B %Y")  # e.g. 3 April 2026
 
 
-def _select_subject(order_type: str, order_number: str, has_blanks: bool, all_blank: bool) -> str:
-    """Select email subject line based on order type."""
-    if all_blank:
-        return f"Update on your film order | {order_number} | digiDirect"
-
-    order_type = (order_type or "").strip()
-
-    if order_type == "Dev+Scan+Print":
-        return f"Your prints and scans are ready | {order_number} | digiDirect"
-    elif order_type == "Dev+Scan":
-        return f"Your scans are ready | {order_number} | digiDirect"
-    elif order_type == "Dev only":
-        return f"Your negatives are ready to collect | {order_number} | digiDirect"
-    elif order_type == "Print only":
-        return f"Your prints are ready to collect | {order_number} | digiDirect"
-    elif order_type == "Scan only":
-        return f"Your scans are ready | {order_number} | digiDirect"
-    else:
-        return f"Your order is ready | {order_number} | digiDirect"
-
-
-def _render_template(template_name: str, context: dict) -> str:
-    """Render a Jinja2 HTML template with the given context."""
-    template = jinja_env.get_template(template_name)
-    return template.render(**context)
-
-
-def _send_smtp(
-    gmail_address: str,
-    gmail_app_password: str,
-    to_email: str,
-    subject: str,
-    html_body: str,
-):
-    """Send an email via Gmail SMTP."""
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = gmail_address
-    msg["To"] = to_email
-
-    msg.attach(MIMEText(html_body, "html"))
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(gmail_address, gmail_app_password)
-        server.sendmail(gmail_address, to_email, msg.as_string())
-
-
-def _log_email(
-    client,
-    order_id: str,
-    to_email: str,
-    subject: str,
-    template_name: str,
-    status: str,
-    error_message: Optional[str] = None,
-):
-    """Log email send attempt to email_log table."""
+# ---------------------------------------------------------------------------
+# Helper — fetch store settings
+# ---------------------------------------------------------------------------
+def _get_store_settings(store_id: str) -> dict:
+    """Fetch storage policy and review URL from store_settings."""
     try:
-        client.table("email_log").insert({
-            "order_id": order_id,
-            "to_email": to_email,
-            "subject": subject,
-            "template_name": template_name,
-            "status": status,
-            "error_message": error_message,
-            "sent_at": datetime.utcnow().isoformat(),
-        }).execute()
+        sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        result = sb.table("store_settings").select("*").eq("store_id", store_id).single().execute()
+        if result.data:
+            return result.data
     except Exception as e:
-        logger.error(f"[email_service] Failed to log email: {e}")
-
-
-async def send_order_email(
-    client,
-    config: dict,
-    order: dict,
-    rolls: list,
-) -> bool:
-    """
-    Send the appropriate customer email for a completed order.
-    Called automatically by the drive watcher when all rolls are scanned.
-    Returns True if sent successfully.
-
-    If the order has border_scan enabled, the bordered_scans_drive_url will
-    be None at this point (processing runs async after email). The template
-    receives bordered_scans_url=None and gracefully omits the bordered link.
-    """
-    to_email = order.get("customer_email")
-    if not to_email:
-        logger.warning(f"[email_service] No customer email for order {order.get('order_number')}")
-        return False
-
-    order_type = order.get("order_type", "")
-    order_number = order.get("order_number", "")
-    customer_name = order.get("customer_name", "")
-    drive_url = order.get("drive_order_folder_url", "")
-
-    # Border scans — will be None if processing hasn't completed yet
-    bordered_scans_url = order.get("bordered_scans_drive_url") or None
-    has_border_scan = bool(order.get("border_scan", False))
-
-    # Determine blank status
-    blank_rolls = [r for r in rolls if r.get("is_blank") or r.get("status") == "blank"]
-    all_blank = len(blank_rolls) == len(rolls)
-    has_blanks = len(blank_rolls) > 0
-
-    template_name = _select_template(order_type, has_blanks, all_blank)
-    subject = _select_subject(order_type, order_number, has_blanks, all_blank)
-
-    # Build blank twins list for blank notification
-    blank_twins = [r.get("twin_check", "") for r in blank_rolls]
-
-    context = {
-        "first_name": _first_name(customer_name),
-        "customer_name": customer_name,
-        "order_number": order_number,
-        "drive_url": drive_url,
-        "has_blanks": has_blanks,
-        "all_blank": all_blank,
-        "blank_twins": blank_twins,
-        "blank_count": len(blank_rolls),
-        "total_rolls": len(rolls),
-        "store_name": "digiDirect",
-        # Border scan context — templates check has_border_scan and bordered_scans_url
-        "has_border_scan": has_border_scan,
-        "bordered_scans_url": bordered_scans_url,
+        logger.warning(f"Could not fetch store_settings for {store_id}: {e}")
+    # Safe fallback defaults
+    return {
+        "print_storage_days": 30,
+        "negative_storage_days": 30,
+        "drive_storage_days": 90,
+        "google_review_url": None,
     }
 
+
+# ---------------------------------------------------------------------------
+# Helper — fetch active promotions
+# ---------------------------------------------------------------------------
+def _get_active_promotions() -> list:
+    """Fetch all active promotions from the promotions table."""
     try:
-        html_body = _render_template(template_name, context)
+        sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        today = datetime.utcnow().date().isoformat()
+        result = (
+            sb.table("promotions")
+            .select("*")
+            .eq("active", True)
+            .or_(f"valid_until.is.null,valid_until.gte.{today}")
+            .execute()
+        )
+        return result.data or []
     except Exception as e:
-        logger.error(f"[email_service] Template render failed: {e}")
-        _log_email(client, order["id"], to_email, subject,
-                   template_name, "failed", str(e))
+        logger.warning(f"Could not fetch promotions: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Helper — cross-sell flags
+# ---------------------------------------------------------------------------
+def _get_crosssell_flags(order: dict) -> dict:
+    """
+    Determine which services the order did NOT include.
+    These drive the More To Explore cross-sell tiles.
+    """
+    service_type = (order.get("service_type") or "").lower()
+    has_scans  = "scan" in service_type
+    has_prints = "print" in service_type
+    has_border = bool(order.get("border_scan"))
+    has_contact = bool(order.get("contact_sheet"))
+
+    return {
+        "crosssell_scans":   not has_scans,
+        "crosssell_prints":  not has_prints,
+        "crosssell_border":  not has_border,
+        "crosssell_contact": not has_contact,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helper — fetch drive config for store (Gmail credentials)
+# ---------------------------------------------------------------------------
+def _get_drive_config(store_id: str) -> Optional[dict]:
+    try:
+        sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        result = (
+            sb.table("drive_config")
+            .select("*")
+            .eq("store_id", store_id)
+            .single()
+            .execute()
+        )
+        return result.data
+    except Exception as e:
+        logger.error(f"Could not fetch drive_config for store {store_id}: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Core send function
+# ---------------------------------------------------------------------------
+def send_order_email(
+    order: dict,
+    template_key: str,
+    drive_url: Optional[str] = None,
+) -> bool:
+    """
+    Render and send a customer email for an order.
+
+    Args:
+        order:        Enriched order dict (from _enrich() in orders.py)
+        template_key: One of the keys in TEMPLATE_MAP
+        drive_url:    Optional — Drive folder URL injected by watcher
+
+    Returns:
+        True on success, False on failure
+    """
+
+    # --- Resolve template ---
+    template_file = TEMPLATE_MAP.get(template_key)
+    if not template_file:
+        logger.error(f"Unknown template key: {template_key}")
         return False
 
-    gmail_address = config.get("gmail_address")
-    gmail_app_password = config.get("gmail_app_password")
+    # --- Customer details ---
+    customer_name  = _title_name(order.get("customer_name"))
+    first_name     = customer_name.split()[0] if customer_name != "there" else "there"
+    order_number   = order.get("order_number") or order.get("pronto_order_number") or "—"
+    customer_email = order.get("customer_email")
+    store_name     = order.get("store_name") or "digiDirect"
+    store_id       = order.get("store_id")
+    account_number = order.get("customer_account") or order.get("account_number") or None
+
+    # Invoice date — formatted
+    raw_date = order.get("order_date") or order.get("created_at")
+    try:
+        if isinstance(raw_date, str):
+            base_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        else:
+            base_date = raw_date or datetime.utcnow()
+    except Exception:
+        base_date = datetime.utcnow()
+
+    invoice_date_str = base_date.strftime("%-d %B %Y")
+
+    # --- Store settings (storage policy + review URL) ---
+    store_settings = _get_store_settings(store_id) if store_id else {}
+    print_days    = store_settings.get("print_storage_days", 30)
+    negative_days = store_settings.get("negative_storage_days", 30)
+    drive_days    = store_settings.get("drive_storage_days", 90)
+    google_review_url = store_settings.get("google_review_url")
+
+    # --- Expiry dates ---
+    drive_expiry    = _expiry_str(base_date, drive_days)
+    print_expiry    = _expiry_str(base_date, print_days)
+    negative_expiry = _expiry_str(base_date, negative_days)
+
+    # --- Service flags ---
+    service_type = (order.get("service_type") or "").lower()
+    has_scans    = "scan" in service_type
+    has_prints   = "print" in service_type
+    has_border   = bool(order.get("border_scan"))
+    has_contact  = bool(order.get("contact_sheet"))
+
+    # --- Promotions ---
+    promotions = _get_active_promotions()
+
+    # --- Cross-sell flags ---
+    crosssell = _get_crosssell_flags(order)
+
+    # --- Subject line ---
+    subject_template = SUBJECT_MAP.get(template_key, "An update on your order")
+    subject = subject_template.format(
+        first_name=first_name,
+        order_number=order_number,
+    )
+
+    # --- Render template ---
+    try:
+        template = jinja_env.get_template(template_file)
+        html_body = template.render(
+            # Customer
+            customer_name=customer_name,
+            first_name=first_name,
+            order_number=order_number,
+            account_number=account_number,
+            invoice_date=invoice_date_str,
+            store_name=store_name,
+            # Drive
+            drive_url=drive_url or order.get("drive_order_folder_url"),
+            # Service flags
+            has_scans=has_scans,
+            has_prints=has_prints,
+            has_border=has_border,
+            has_contact=has_contact,
+            # Storage expiry
+            drive_expiry=drive_expiry,
+            print_expiry=print_expiry,
+            negative_expiry=negative_expiry,
+            # Promotions
+            promotions=promotions,
+            # Cross-sell
+            **crosssell,
+            # Review
+            google_review_url=google_review_url,
+            # Blank roll
+            blank_roll_count=order.get("blank_roll_count") or 0,
+        )
+    except Exception as e:
+        logger.error(f"Template render failed for {template_key}: {e}")
+        return False
+
+    # --- Send via Gmail SMTP ---
+    if not customer_email:
+        logger.warning(f"No customer email for order {order_number} — skipping send")
+        return False
+
+    drive_config = _get_drive_config(store_id) if store_id else None
+    if not drive_config:
+        logger.error(f"No drive_config for store {store_id} — cannot send email")
+        return False
+
+    gmail_address  = drive_config.get("gmail_address")
+    gmail_password = drive_config.get("gmail_app_password")
 
     try:
-        _send_smtp(gmail_address, gmail_app_password, to_email, subject, html_body)
-        logger.info(f"[email_service] Email sent to {to_email} for order {order_number}")
-        _log_email(client, order["id"], to_email, subject, template_name, "sent")
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"digiDirect {store_name} Lab <{gmail_address}>"
+        msg["To"]      = customer_email
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail_address, gmail_password)
+            server.sendmail(gmail_address, customer_email, msg.as_string())
+
+        logger.info(f"Email sent: {template_key} → {customer_email} (order {order_number})")
         return True
+
     except Exception as e:
-        logger.error(f"[email_service] SMTP failed for order {order_number}: {e}")
-        _log_email(client, order["id"], to_email, subject,
-                   template_name, "failed", str(e))
+        logger.error(f"SMTP send failed for order {order_number}: {e}")
         return False
 
 
+# ---------------------------------------------------------------------------
+# Template key derivation
+# ---------------------------------------------------------------------------
+def _derive_template_key(order: dict) -> str:
+    """
+    Pick the appropriate email template based on order_type.
+    Falls back to blank_notification when no match is found.
+    """
+    order_type = (order.get("order_type") or "").lower()
+    has_scan  = "scan" in order_type
+    has_print = "print" in order_type
+    has_neg   = "neg" in order_type or "negative" in order_type
+
+    if has_scan and has_print:
+        return "prints_and_scans_ready"
+    if has_scan:
+        return "scans_ready"
+    if has_print:
+        return "prints_ready"
+    if has_neg:
+        return "negatives_ready"
+    return "blank_notification"
+
+
+# ---------------------------------------------------------------------------
+# Manual / staff-triggered send
+# ---------------------------------------------------------------------------
 async def send_manual_email(
     order_id: str,
     template_override: Optional[str] = None,
 ) -> bool:
     """
-    Send a manual email for an order — used for Dev only and Print only templates
-    which require staff to trigger manually.
+    Fetch an order from Supabase, choose the right template, send the email,
+    and write the result to the email_log table.
+
+    Args:
+        order_id:          UUID string of the order.
+        template_override: If supplied and a valid TEMPLATE_MAP key, use it
+                           instead of the auto-derived template.
+
+    Returns:
+        True on success, False on any failure.
     """
+    sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+
+    # Fetch order
     try:
-        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-
-        # Fetch order
-        order_result = client.table("orders").select("*").eq("id", order_id).execute()
-        if not order_result.data:
-            logger.error(f"[email_service] Order {order_id} not found")
-            return False
-        order = order_result.data[0]
-
-        # Fetch store drive config for SMTP credentials
-        config_result = client.table("drive_config").select("*").eq(
-            "store_id", order["store_id"]
-        ).execute()
-        if not config_result.data:
-            logger.error(f"[email_service] No drive config for store {order['store_id']}")
-            return False
-        config = config_result.data[0]
-
-        # Fetch rolls
-        rolls_result = client.table("rolls").select("*").eq("order_id", order_id).execute()
-        rolls = rolls_result.data or []
-
-        return await send_order_email(client, config, order, rolls)
-
+        result = (
+            sb.table("orders")
+            .select(
+                "id, order_number, order_type, order_date, created_at, status, "
+                "customer_name, customer_email, account, store_id, "
+                "drive_order_folder_url, border_scan, contact_sheet, rebate_scan, "
+                "has_blanks, blank_roll_count, email_status"
+            )
+            .eq("id", order_id)
+            .single()
+            .execute()
+        )
     except Exception as e:
-        logger.error(f"[email_service] Manual email failed: {e}")
+        logger.error(f"[send_manual_email] Failed to fetch order {order_id}: {e}")
         return False
+
+    if not result.data:
+        logger.error(f"[send_manual_email] Order {order_id} not found")
+        return False
+
+    order = result.data
+
+    # Fetch store name
+    store_id = order.get("store_id")
+    if store_id:
+        try:
+            store_result = sb.table("stores").select("name").eq("id", store_id).single().execute()
+            order["store_name"] = store_result.data.get("name") if store_result.data else None
+        except Exception:
+            order["store_name"] = None
+
+    # service_type shim — send_order_email uses this for has_scans / has_prints flags
+    order["service_type"] = order.get("order_type") or ""
+
+    # Resolve template key
+    template_key = template_override if template_override in TEMPLATE_MAP else _derive_template_key(order)
+
+    # Send
+    success = send_order_email(order=order, template_key=template_key)
+
+    # Log result to email_log
+    try:
+        sb.table("email_log").insert({
+            "order_id": order_id,
+            "template_key": template_key,
+            "recipient": order.get("customer_email"),
+            "status": "sent" if success else "failed",
+            "triggered_by": "manual",
+        }).execute()
+    except Exception as e:
+        logger.warning(f"[send_manual_email] Could not write to email_log: {e}")
+
+    # Update order email_status on success
+    if success:
+        try:
+            sb.table("orders").update({"email_status": "sent"}).eq("id", order_id).execute()
+        except Exception as e:
+            logger.warning(f"[send_manual_email] Could not update email_status: {e}")
+
+    return success

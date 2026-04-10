@@ -79,12 +79,17 @@ class Order(Base):
     is_print_only = Column(Boolean, default=False)
     has_blanks = Column(Boolean, default=False)
 
+    # --- Manual entry flag ---
+    # True when order was booked manually (Pronto not available)
+    # False (default) for all Pronto-synced orders
+    manual_entry = Column(Boolean, default=False)
+
     # --- Border / add-on scan flags ---
     border_scan = Column(Boolean, default=False)
     contact_sheet = Column(Boolean, default=False)
     rebate_scan = Column(Boolean, default=False)
-    border_scan_status = Column(Text, default=None)          # null | processing | complete | failed
-    bordered_scans_drive_url = Column(Text, default=None)    # Drive link once complete
+    border_scan_status = Column(Text, default=None)
+    bordered_scans_drive_url = Column(Text, default=None)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     date_scanned = Column(DateTime(timezone=True))
