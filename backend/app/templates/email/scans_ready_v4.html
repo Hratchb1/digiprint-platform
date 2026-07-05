@@ -1,0 +1,540 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="x-apple-disable-message-reformatting" />
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
+<meta name="color-scheme" content="light only" />
+<meta name="supported-color-schemes" content="light only" />
+<title>Your scans are ready · digiDirect</title>
+
+{#
+  ===============================================================================
+  ROLLCALL EMAIL TEMPLATE — SCANS READY (v4)
+  ===============================================================================
+  Production-ready, table-based, inline CSS layout.
+  Tested for: Gmail (web/iOS/Android), Apple Mail (iOS/macOS), Outlook (Win/Mac/web).
+
+  ASSET HOSTING — Supabase public bucket "email-assets"
+    Base URL: https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets
+
+  VARIABLES IN USE (matched to existing email_service.py contract):
+    {{ first_name }}          - Customer first name (Title Case)
+    {{ customer_name }}       - Customer full name (Title Case)
+    {{ order_number }}        - Pronto / RollCall order number
+    {{ account_number }}      - B2B account (optional, only shown if present)
+    {{ invoice_date }}        - "25 April 2026" formatted
+    {{ store_name }}          - Store short name e.g. "Bondi"
+    {{ drive_url }}           - Google Drive folder link
+    {{ drive_expiry }}        - "25 October 2026" formatted
+    {{ print_expiry }}        - "9 May 2026" — used only when has_prints
+    {{ negative_expiry }}     - "9 May 2026"
+    {{ has_prints }}          - bool — toggles Prints in-store row
+    {{ promotions }}          - list of {title, link_url, link_label}
+    {{ google_review_url }}   - per-store review link (optional)
+
+  TODO — variables NOT YET WIRED in email_service.py (using safe defaults):
+    {{ rolls_count }}         - "2"  → for "2 rolls · 72 frames" eyebrow
+    {{ frames_count }}        - "72"
+    {{ service_label }}       - "Develop & Scan · 35mm"
+    {{ twin_check_range }}    - "0042-0043"
+    {{ store_address_line }}  - "Westfield Bondi Junction, NSW 2022"
+    {{ store_reply_email }}   - "bondi@digidirect.com.au" (mailto link)
+    {{ store_hours_label }}   - "Open 7 days"
+    {{ store_instagram_url }} - "https://www.instagram.com/digidirect"
+  See the bottom of this file for a full TODO checklist.
+  ===============================================================================
+#}
+
+<!--[if mso]>
+<noscript>
+  <xml>
+    <o:OfficeDocumentSettings>
+      <o:PixelsPerInch>96</o:PixelsPerInch>
+      <o:AllowPNG/>
+    </o:OfficeDocumentSettings>
+  </xml>
+</noscript>
+<style>
+  body, table, td, p, a, li, blockquote { font-family: 'Helvetica Neue', Arial, sans-serif !important; }
+  table { border-collapse: collapse !important; }
+</style>
+<![endif]-->
+
+<style type="text/css">
+  body { margin:0 !important; padding:0 !important; width:100% !important; min-width:100% !important; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  table { border-collapse:collapse !important; mso-table-lspace:0pt; mso-table-rspace:0pt; }
+  img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; display:block; }
+  a { text-decoration:none; }
+  a[x-apple-data-detectors] { color:inherit !important; text-decoration:none !important; }
+  .preheader { display:none !important; visibility:hidden; mso-hide:all; font-size:1px; color:#f4f1ec; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden; }
+  @media only screen and (max-width: 600px) {
+    .container { width:100% !important; max-width:100% !important; }
+    .px-mobile { padding-left:24px !important; padding-right:24px !important; }
+    .py-mobile-sm { padding-top:24px !important; padding-bottom:24px !important; }
+    .stack { display:block !important; width:100% !important; max-width:100% !important; }
+    .stack-cell { display:block !important; width:100% !important; max-width:100% !important; padding:0 0 16px 0 !important; }
+    .hide-mobile { display:none !important; max-height:0 !important; overflow:hidden !important; mso-hide:all; }
+    .h1-mobile { font-size:34px !important; line-height:1.1 !important; }
+    .h2-mobile { font-size:20px !important; line-height:1.2 !important; }
+    .body-mobile { font-size:15px !important; line-height:1.55 !important; }
+    .tile-img { width:100% !important; height:auto !important; max-width:none !important; }
+    .tile-cell { padding:0 0 8px 0 !important; }
+    .center-mobile { text-align:center !important; }
+  }
+</style>
+</head>
+<body bgcolor="#f4f1ec" style="margin:0; padding:0; background-color:#f4f1ec;">
+
+<!-- Preheader (inbox preview text) -->
+<div class="preheader">Your film has been processed and your scans are ready &mdash; view them now. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+
+<!-- Outer wrapper -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f1ec" style="background:#f4f1ec;">
+  <tr>
+    <td align="center" valign="top" style="padding:0;">
+
+      <!-- 600px container -->
+      <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:600px; max-width:600px; background:#ffffff;">
+
+        <!-- ============================================================
+             BLOCK 1 + 2 — Brand bar fused with Hero (BLACK)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" style="background:#0e0e0e; padding:0;">
+
+            <!-- digiDirect logo, centred -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" style="padding:32px 24px 8px 24px;">
+                  <a href="https://www.digidirect.com.au" target="_blank" style="text-decoration:none;">
+                    <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/digidirect-logo-white.png" width="160" height="32" alt="digiDirect" style="display:block; width:160px; max-width:160px; height:32px;" />
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Hero copy -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" style="padding:32px 40px 56px 40px;" class="px-mobile">
+                  <p style="margin:0 0 14px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ff7a1a; line-height:1;">Development complete</p>
+                  <h1 class="h1-mobile" style="margin:0 0 18px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:42px; line-height:1.1; font-weight:300; letter-spacing:-1px; color:#ffffff;">Hi {{ first_name }},</h1>
+                  <p class="body-mobile" style="margin:0 0 28px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:16px; line-height:1.6; color:#adaaaa;">
+                    Your film has been processed and scanned by our {{ store_name }} lab. Every frame has been checked with care, and your scans are ready to view below.
+                    {% if has_prints %}Your prints are also ready to collect from digiDirect {{ store_name }}.{% endif %}
+                  </p>
+
+                  <!-- Bulletproof CTA button -->
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <!--[if mso]>
+                      <td align="center" bgcolor="#ff7a1a" style="background:#ff7a1a; mso-padding-alt:0;">
+                        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{ drive_url }}" style="height:50px;v-text-anchor:middle;width:200px;" arcsize="12%" stroke="f" fillcolor="#ff7a1a">
+                          <w:anchorlock/>
+                          <center style="color:#ffffff;font-family:Helvetica,Arial,sans-serif;font-size:14px;font-weight:bold;">View Your Scans &rarr;</center>
+                        </v:roundrect>
+                      </td>
+                      <![endif]-->
+                      <!--[if !mso]><!-->
+                      <td align="center" bgcolor="#ff7a1a" style="background:#ff7a1a; border-radius:6px;">
+                        <a href="{{ drive_url }}" target="_blank" style="display:inline-block; padding:16px 36px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#ffffff; text-decoration:none; letter-spacing:0.3px; line-height:1;">View Your Scans &rarr;</a>
+                      </td>
+                      <!--<![endif]-->
+                    </tr>
+                  </table>
+
+                  <p style="margin:14px 0 0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.5; color:#6b6864;">Download the Google Drive app for better viewing.</p>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 3 — Storage & Access (LIGHT)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#faf7f2" style="background:#faf7f2; padding:40px 32px;" class="px-mobile py-mobile-sm">
+
+            <!-- Drive + Negatives card -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;">
+              <tr>
+                <td bgcolor="#ff7a1a" width="3" style="background:#ff7a1a; width:3px; line-height:0; font-size:0;">&nbsp;</td>
+                <td style="padding:24px;">
+                  <h2 class="h2-mobile" style="margin:0 0 22px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:22px; line-height:1.2; font-weight:bold; letter-spacing:-0.3px; color:#0e0e0e;">Storage &amp; Access</h2>
+
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <!-- Drive scans expiry -->
+                      <td valign="top" class="stack-cell" style="width:50%; padding:0 12px 0 0;">
+                        <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-cloud-orange.png" width="20" height="20" alt="" style="display:block; width:20px; height:20px; margin:0 0 10px;" />
+                        <p style="margin:0 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Drive scans available until</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:18px; line-height:1.2; font-weight:bold; color:#0e0e0e;">{{ drive_expiry }}</p>
+                        <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.5; color:#6b6864;">Your scans live on Google Drive — download or back them up before then.</p>
+                      </td>
+                      <!-- Negatives -->
+                      <td valign="top" class="stack-cell" style="width:50%; padding:0 0 0 12px;">
+                        <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-film-orange.png" width="20" height="20" alt="" style="display:block; width:20px; height:20px; margin:0 0 10px;" />
+                        <p style="margin:0 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Collect negatives by</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:18px; line-height:1.2; font-weight:bold; color:#0e0e0e;">{{ negative_expiry }}</p>
+                        <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.5; color:#6b6864;">Negatives are held in store. We can't guarantee availability after this date — if you need us to hold them longer, just send us an email.</p>
+                      </td>
+                    </tr>
+                  </table>
+
+                  {# Conditional Prints in-store row — only when has_prints #}
+                  {% if has_prints %}
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px; border-top:1px solid #e9e5dd;">
+                    <tr>
+                      <td style="padding:14px 0 0 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Prints in-store · collect by {{ print_expiry }}</p>
+                        <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.5; color:#6b6864;">Your prints are ready to collect from digiDirect {{ store_name }}.</p>
+                      </td>
+                    </tr>
+                  </table>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+
+            {# Quick info — black panel.
+               TODO: requires rolls_count + frames_count vars (not yet in email_service.py)
+                     Render only when both are passed; remove this comment block once wired.
+            #}
+            {% if rolls_count and frames_count %}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0e0e0e" style="background:#0e0e0e; margin-top:14px;">
+              <tr>
+                <td style="padding:24px;">
+                  <p style="margin:0 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ff7a1a;">{{ rolls_count }} rolls · {{ frames_count }} frames</p>
+                  <p style="margin:0 0 16px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; line-height:1.5; color:#adaaaa;">High-resolution JPEG scans, ready to download or share.</p>
+                  <a href="{{ drive_url }}" target="_blank" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:11px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#ff7a1a; text-decoration:none;">Open Drive folder &rarr;</a>
+                </td>
+              </tr>
+            </table>
+            {% endif %}
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 4 — Promo banner (ORANGE)
+             Loops over existing `promotions` list. Shows only the first.
+             ============================================================ -->
+        {% if promotions and promotions|length > 0 %}
+        {% set promo = promotions[0] %}
+        <tr>
+          <td bgcolor="#ff7a1a" style="background:#ff7a1a;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="middle" style="padding:36px 40px;" class="px-mobile">
+                  <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ffe2cc;">Current promotion</p>
+                  <h3 style="margin:0 0 14px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:24px; line-height:1.25; font-weight:bold; letter-spacing:-0.3px; color:#ffffff;">{{ promo.title }}</h3>
+                  {% if promo.link_url and promo.link_label %}
+                  <a href="{{ promo.link_url }}" target="_blank" style="display:inline-block; background:#ffffff; padding:10px 20px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; font-weight:bold; letter-spacing:1px; text-transform:uppercase; color:#0e0e0e; text-decoration:none; line-height:1;">{{ promo.link_label }} &rarr;</a>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
+        <!-- ============================================================
+             BLOCK 5 — Always more available · digiPrint (BLACK)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" style="background:#0e0e0e; padding:24px 24px 20px 24px;">
+
+            <!-- Header -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" style="padding:0 0 18px 0;">
+                  <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#adaaaa;">Always more available</p>
+                  <a href="https://www.digiprint.com.au" target="_blank" style="text-decoration:none;">
+                    <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/digiprint-logo-white.png" width="120" height="28" alt="digiPrint" style="display:inline-block; width:120px; max-width:120px; height:28px;" />
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- 3 tiles, side by side on desktop, stacked on mobile -->
+            {# TODO: tile hero images. Currently using placeholder Lorem Picsum.
+               Replace with branded tile images uploaded to the Supabase bucket:
+                 - tile-print-online.jpg
+                 - tile-photo-books.jpg
+                 - tile-restock-film.jpg
+               Then swap the three <img src="..."> URLs below.
+            #}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <!-- Tile 1: Print Online -->
+                <td valign="top" class="stack tile-cell" style="width:33.33%; padding:0 4px 0 0;">
+                  <a href="https://www.digiprint.com.au/print-online" target="_blank" style="text-decoration:none; color:#ffffff; display:block;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#1a1a1a" style="background:#1a1a1a;">
+                      <tr>
+                        <td style="padding:0; line-height:0; font-size:0;">
+                          <img src="https://picsum.photos/seed/printonline/180/180" width="180" height="180" alt="" class="tile-img" style="display:block; width:180px; max-width:180px; height:180px; opacity:0.85;" />
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding:14px 8px; background:#1a1a1a;">
+                          <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:15px; font-weight:bold; letter-spacing:-0.2px; color:#ffffff; line-height:1.2;">Print Online</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </a>
+                </td>
+
+                <!-- Tile 2: Personalised Photo Books -->
+                <td valign="top" class="stack tile-cell" style="width:33.33%; padding:0 4px 0 4px;">
+                  <a href="https://www.digiprint.com.au/photobooks" target="_blank" style="text-decoration:none; color:#ffffff; display:block;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#1a1a1a" style="background:#1a1a1a;">
+                      <tr>
+                        <td style="padding:0; line-height:0; font-size:0;">
+                          <img src="https://picsum.photos/seed/photobooks/180/180" width="180" height="180" alt="" class="tile-img" style="display:block; width:180px; max-width:180px; height:180px; opacity:0.85;" />
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding:14px 8px; background:#1a1a1a;">
+                          <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; letter-spacing:-0.2px; color:#ffffff; line-height:1.2;">Personalised Photo Books</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </a>
+                </td>
+
+                <!-- Tile 3: Restock Film -->
+                <td valign="top" class="stack tile-cell" style="width:33.33%; padding:0 0 0 4px;">
+                  <a href="https://www.digidirect.com.au/film" target="_blank" style="text-decoration:none; color:#ffffff; display:block;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#1a1a1a" style="background:#1a1a1a;">
+                      <tr>
+                        <td style="padding:0; line-height:0; font-size:0;">
+                          <img src="https://picsum.photos/seed/restockfilm/180/180" width="180" height="180" alt="" class="tile-img" style="display:block; width:180px; max-width:180px; height:180px; opacity:0.85;" />
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding:14px 8px; background:#1a1a1a;">
+                          <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:15px; font-weight:bold; letter-spacing:-0.2px; color:#ffffff; line-height:1.2;">Restock Film</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 6 — Google Review + Instagram (BLACK, centred)
+             Only renders if google_review_url is set
+             ============================================================ -->
+        {% if google_review_url %}
+        <tr>
+          <td bgcolor="#0e0e0e" align="center" style="background:#0e0e0e; padding:8px 32px 32px 32px;">
+            <p style="margin:0 0 18px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#adaaaa;">Loved your scans? Share the love.</p>
+
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+              <tr>
+                <td bgcolor="#ffffff" style="background:#ffffff; padding:12px 18px;">
+                  <a href="{{ google_review_url }}" target="_blank" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:11px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#0e0e0e; text-decoration:none; line-height:1;">
+                    <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-google.png" width="16" height="16" alt="" style="display:inline-block; vertical-align:middle; margin-right:8px; width:16px; height:16px;" />Leave a Google Review
+                  </a>
+                </td>
+                <td style="width:10px; line-height:0; font-size:0;">&nbsp;</td>
+                <td bgcolor="#ffffff" style="background:#ffffff; padding:12px 18px;">
+                  <a href="{{ store_instagram_url|default('https://www.instagram.com/digidirect') }}" target="_blank" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:11px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#0e0e0e; text-decoration:none; line-height:1;">
+                    <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-instagram.png" width="16" height="16" alt="" style="display:inline-block; vertical-align:middle; margin-right:8px; width:16px; height:16px;" />Tag us @digidirect
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+        {% endif %}
+
+        <!-- ============================================================
+             BLOCK 7 — Collection point (TOP) + Order details (BELOW)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#ffffff" style="background:#ffffff; padding:48px 40px; border-top:1px solid #e9e5dd;" class="px-mobile">
+
+            <!-- Collection point -->
+            <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Collection point</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#faf7f2" style="background:#faf7f2;">
+              <tr>
+                <td style="padding:24px;">
+
+                  <!-- When picking up callout (ABOVE address) -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td align="center" style="padding:0 0 18px 0;">
+                        <p style="margin:0 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#6b6864;">When picking up</p>
+                        <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:17px; line-height:1.3; font-weight:bold; color:#0e0e0e;">Please present this email in store</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:0; border-top:1px solid #e9e5dd; line-height:0; font-size:0;">&nbsp;</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:18px 0 0 0;">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                          <tr>
+                            <td valign="top" width="32" style="width:32px; padding:2px 12px 0 0;">
+                              <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-pin-orange.png" width="20" height="20" alt="" style="display:block; width:20px; height:20px;" />
+                            </td>
+                            <td valign="top">
+                              <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:15px; font-weight:bold; color:#0e0e0e;">digiDirect {{ store_name }}</p>
+                              {# TODO: store_address_line not yet wired in email_service.py — add per-store address from stores table #}
+                              <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#6b6864;">{{ store_address_line|default('Address available in-store') }}</p>
+                              <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#f96400;">{{ store_hours_label|default('Open 7 days') }}</p>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+
+            {# TODO: store_reply_email not yet wired — falls back to a generic message #}
+            {% if store_reply_email %}
+            <p style="margin:14px 0 36px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.5; color:#6b6864;">Something not right? <a href="mailto:{{ store_reply_email }}" style="color:#f96400; font-weight:bold; text-decoration:underline;">Reply to this email</a> and the {{ store_name }} lab will sort it.</p>
+            {% else %}
+            <p style="margin:14px 0 36px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.5; color:#6b6864;">Something not right? Reply to this email and the {{ store_name }} lab will sort it.</p>
+            {% endif %}
+
+            <!-- Order details -->
+            <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Order details</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Customer</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ customer_name }}</td>
+              </tr>
+              {% if account_number %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Account number</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ account_number }}</td>
+              </tr>
+              {% endif %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Order number</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ order_number }}</td>
+              </tr>
+              {# TODO: service_label not yet wired — comment block out until added #}
+              {% if service_label %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Service</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ service_label }}</td>
+              </tr>
+              {% endif %}
+              {# TODO: twin_check_range not yet wired — comment block out until added #}
+              {% if twin_check_range %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Twin checks</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ twin_check_range }}</td>
+              </tr>
+              {% endif %}
+              <tr>
+                <td style="padding:12px 0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Processed</td>
+                <td align="right" style="padding:12px 0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#f96400;">{{ invoice_date }}</td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 8 — Footer (BLACK, legal, compact)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" align="center" style="background:#0e0e0e; padding:24px 32px;">
+
+            <a href="https://www.digidirect.com.au" target="_blank" style="text-decoration:none;">
+              <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/digidirect-logo-white.png" width="100" height="20" alt="digiDirect" style="display:inline-block; width:100px; max-width:100px; height:20px; margin:0 0 14px;" />
+            </a>
+
+            <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; line-height:1.6;">
+              <a href="https://www.digidirect.com.au/contact" target="_blank" style="color:#adaaaa; text-decoration:none;">Contact Us</a>
+              <span style="color:#262626;">&nbsp;·&nbsp;</span>
+              <a href="https://www.digidirect.com.au/privacy" target="_blank" style="color:#adaaaa; text-decoration:none;">Privacy Policy</a>
+              <span style="color:#262626;">&nbsp;·&nbsp;</span>
+              <a href="https://www.digidirect.com.au/terms" target="_blank" style="color:#adaaaa; text-decoration:none;">Terms and Conditions</a>
+            </p>
+
+            <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:11px; line-height:1.6; color:#adaaaa;">This email was sent by Digital Imaging Express Pty. Ltd. digiDirect Australia. All rights reserved, (ABN 92 122 703 806).</p>
+
+          </td>
+        </tr>
+
+      </table>
+      <!-- /container -->
+
+    </td>
+  </tr>
+</table>
+<!-- /outer wrapper -->
+
+{#
+  ===============================================================================
+  TODO CHECKLIST — TO BE DONE BY USER OR IN A FOLLOW-UP SESSION
+  ===============================================================================
+
+  1. UPLOAD ASSETS to the Supabase bucket (email-assets, must be PUBLIC):
+     - digidirect-logo-white.png
+     - digiprint-logo-white.png
+     - icon-cloud-orange.png
+     - icon-film-orange.png
+     - icon-pin-orange.png
+     - icon-google.png
+     - icon-instagram.png
+     (digidirect-logo-color.png — uploaded but not used in this template)
+     Source: digiDirect HQ/images/
+
+  2. ACTIVATE THIS TEMPLATE — change one line in app/services/email_service.py:
+        TEMPLATE_MAP = {
+            "scans_ready": "scans_ready_v4.html",  # <-- swap from scans_ready.html
+            ...
+        }
+
+  3. TILE HERO IMAGES — currently using picsum.photos placeholders.
+     Generate or source 3 branded square images (180x180 minimum):
+        - tile-print-online.jpg
+        - tile-photo-books.jpg
+        - tile-restock-film.jpg
+     Upload to Supabase, then swap the three <img src="..."> URLs in BLOCK 5.
+
+  4. NEW VARIABLES TO WIRE in email_service.py render() call (all optional —
+     template falls back gracefully if not provided):
+        rolls_count           - int (e.g. 2)              -> from order
+        frames_count          - int (e.g. 72)             -> from order or rolls_count * 36
+        service_label         - str ("Develop & Scan · 35mm")
+        twin_check_range      - str ("0042-0043")         -> from order.twin_checks
+        store_address_line    - str                       -> from stores table
+        store_reply_email     - str (per-store reply-to)  -> from drive_config or stores
+        store_hours_label     - str ("Open 7 days")
+        store_instagram_url   - str (per-store IG handle, optional)
+
+  5. FACEBOOK ICON — currently dropped from this version. If you want it back,
+     generate icon-facebook.png, upload to Supabase, then add a third pill
+     button in BLOCK 6 next to Instagram.
+
+  6. TEST SEND — once activated, trigger a Scans Ready email from RollCall for
+     a Bondi test order. Check rendering in Gmail web, Gmail mobile, Apple Mail,
+     and Outlook desktop if available.
+
+  ===============================================================================
+#}
+
+</body>
+</html>

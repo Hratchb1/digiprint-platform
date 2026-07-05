@@ -110,7 +110,7 @@ async def manual_sync(current_user=Depends(get_current_user)):
     Useful for admins when they need fresh data immediately.
     Only accessible to store_admin and master_admin roles.
     """
-    if current_user.role not in ("store_admin", "master_admin"):
+    if current_user.get("role") not in ("store_admin", "master_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required to trigger manual sync.",

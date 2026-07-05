@@ -184,6 +184,14 @@ async def add_rolls_to_order(
         actor_label=_actor(current_user),
     )
 
+    # Primary promotion trigger — staff hit this path via the Intake dup-modal
+    # "Add rolls" choice when an inbound order already exists.
+    if order.status == "inbound":
+        await order_service._promote_inbound_to_booked_in(
+            db, order, actor_label=_actor(current_user),
+            roll_count=len(payload.rolls), source="add_rolls_dup_modal",
+        )
+
     await db.commit()
     order = await order_service.get_order(db, order.id)
     return _enrich(order)
@@ -331,6 +339,7 @@ def _enrich(order: Order) -> dict:
         "status": order.status,
         "customer_name": order.customer_name,
         "customer_email": order.customer_email,
+        "phone_number": order.phone_number,
         "account": order.account,
         "store_id": str(order.store_id),
         "store_name": order.store.name if order.store else str(order.store_id),

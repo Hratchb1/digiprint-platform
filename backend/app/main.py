@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import get_settings
 from app.api import auth, orders, stores
+from app.api.rolls import router as rolls_router
 from app.api.pronto import router as pronto_router
 from app.api.drive import router as drive_router
 from app.api.emails import router as emails_router
@@ -33,6 +34,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
+app.include_router(rolls_router, prefix="/api")
 app.include_router(stores.router, prefix="/api")
 app.include_router(pronto_router, prefix="/api")
 app.include_router(drive_router, prefix="/api")

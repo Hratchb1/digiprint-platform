@@ -510,6 +510,16 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
                        "moved", f"Moved to {order_folder_name}",
                        roll_id=roll_id, order_id=order_id)
 
+    # First scan detected for this order — advance booked_in -> scanning.
+    # Guarded so a later roll on the same order doesn't re-fire this or
+    # downgrade an order that's already past this stage.
+    if order.get("status") == "booked_in":
+        client.table("orders").update({
+            "status": "scanning",
+            "scanning_at": datetime.utcnow().isoformat(),
+        }).eq("id", order_id).execute()
+        order["status"] = "scanning"
+
     all_rolls = client.table("rolls").select(
         "id, status, date_scanned, is_blank"
     ).eq("order_id", order_id).execute()
@@ -526,28 +536,54 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         logger.info(f"[drive_watcher] Order {order['order_number']} waiting for {len(unscanned)} more roll(s)")
         return
 
+    # All rolls scanned — record the Drive link, but do NOT advance to
+    # delivered yet. Status stays on scanning until the email actually
+    # sends successfully (see below).
     client.table("orders").update({
-        "status": "delivered",
-        "date_delivered": datetime.utcnow().isoformat(),
         "drive_order_folder_url": drive_url,
         "date_scanned": datetime.utcnow().isoformat(),
     }).eq("id", order_id).execute()
 
     client.table("order_events").insert({
         "order_id": order_id,
-        "event_type": "delivered",
-        "description": f"All rolls scanned and delivered. Drive: {drive_url}",
+        "event_type": "scans_complete",
+        "description": f"All rolls scanned. Drive: {drive_url}",
         "actor_label": "drive_watcher",
         "metadata": {"drive_url": drive_url, "roll_id": roll_id},
     }).execute()
 
     try:
-        from app.services.email_service import send_order_email
+        from app.services.email_service import send_order_email, _derive_template_key
         order["drive_order_folder_url"] = drive_url
-        await send_order_email(client, config, order, total_rolls)
-        _log_watcher_event(client, store_id, folder_id, folder_name,
-                           "emailed", "Email sent successfully",
-                           roll_id=roll_id, order_id=order_id)
+        order["service_type"] = order.get("order_type") or ""
+        template_key = _derive_template_key(order)
+        sent = send_order_email(order, template_key, drive_url=drive_url)
+
+        if sent:
+            client.table("orders").update({
+                "status": "delivered",
+                "delivered_at": datetime.utcnow().isoformat(),
+            }).eq("id", order_id).execute()
+
+            client.table("order_events").insert({
+                "order_id": order_id,
+                "event_type": "delivered",
+                "description": f"Order delivered — email sent. Drive: {drive_url}",
+                "actor_label": "drive_watcher",
+                "metadata": {"drive_url": drive_url, "roll_id": roll_id},
+            }).execute()
+
+            _log_watcher_event(client, store_id, folder_id, folder_name,
+                               "emailed", "Email sent successfully",
+                               roll_id=roll_id, order_id=order_id)
+        else:
+            logger.error(
+                f"[drive_watcher] Email send returned False for order {order['order_number']} "
+                f"— leaving status on scanning"
+            )
+            _log_watcher_event(client, store_id, folder_id, folder_name,
+                               "error", "Email send returned False",
+                               roll_id=roll_id, order_id=order_id)
     except Exception as e:
         logger.error(f"[drive_watcher] Email failed for order {order['order_number']}: {e}")
         _log_watcher_event(client, store_id, folder_id, folder_name,

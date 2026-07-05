@@ -17,15 +17,12 @@ class ServiceType(str, Enum):
 
 
 class OrderStatus(str, Enum):
-    booked      = "booked"
-    processing  = "processing"
-    scanned     = "scanned"
-    print_ready = "print_ready"
-    devready    = "devready"
-    printready  = "printready"
+    inbound     = "inbound"
+    booked_in   = "booked_in"
+    scanning    = "scanning"
     delivered   = "delivered"
-    blank       = "blank"
     cancelled   = "cancelled"
+    discarded   = "discarded"
     # NOTE: "archived" is intentionally excluded — internal roll-level status only
 
 
@@ -170,6 +167,17 @@ class OrderCreateFromPronto(BaseModel):
     service_type: Optional[ServiceType] = None
 
 
+class TwinCheckUpdate(BaseModel):
+    twin_check: str
+
+    @field_validator("twin_check")
+    @classmethod
+    def validate_twin(cls, v: str) -> str:
+        if not v.isdigit() or len(v) != 4:
+            raise ValueError("Twin check must be exactly 4 numeric digits")
+        return v
+
+
 class OrderRead(BaseModel):
     id: UUID
     order_number: str
@@ -178,6 +186,7 @@ class OrderRead(BaseModel):
     status: str
     customer_name: str
     customer_email: Optional[str]
+    phone_number: Optional[str] = None
     account: Optional[str]
     store_id: UUID
     store_name: Optional[str] = None

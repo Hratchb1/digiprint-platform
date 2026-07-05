@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ordersApi } from '../lib/api'
 import { useState } from 'react'
-import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail } from 'lucide-react'
+import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail, Pencil, Phone } from 'lucide-react'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 
@@ -23,14 +23,15 @@ const NEXT_STATUSES: Record<string, string[]> = {
   print_ready: ['delivered'],
 }
 
+// Twin editing allowed on all statuses — collision check enforced on the backend
+
 function displayRollStatus(status: string): string {
   if (status === 'archived') return 'delivered'
   return status
 }
 
-// Determine manual notify button label for Dev only / Print only orders
 function getNotifyButtonLabel(order: any): string | null {
-  if (order.status === 'delivered') return null  // already delivered — use resend instead
+  if (order.status === 'delivered') return null
   const rolls = order.rolls || []
   const serviceTypes = [...new Set(rolls.map((r: any) => r.service_type))] as string[]
   const isDevOnly = serviceTypes.length > 0 && serviceTypes.every(s => s === 'Dev only')
@@ -49,6 +50,9 @@ export default function OrderDetailPage() {
   const [showDriveInput, setShowDriveInput] = useState(false)
   const [selectedRolls, setSelectedRolls] = useState<Set<string>>(new Set())
   const [emailToast, setEmailToast] = useState<{ type: 'success' | 'error', message: string } | null>(null)
+  const [editingTwin, setEditingTwin] = useState<string | null>(null)
+  const [twinValue, setTwinValue] = useState('')
+  const [twinError, setTwinError] = useState('')
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['order', id],
@@ -80,7 +84,7 @@ export default function OrderDetailPage() {
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setEmailToast({ type, message })
-    setTimeout(() => setEmailToast(null), 4000)
+    setTimeout(() => setEmailToast(null), 5000)
   }
 
   const statusMutation = useMutation({
@@ -114,8 +118,6 @@ export default function OrderDetailPage() {
     onSuccess: invalidate,
   })
 
-  // Send manual notification email (Dev only / Print only)
-  // On success: also mark order as delivered
   const sendEmailMutation = useMutation({
     mutationFn: () => fetch(`/api/emails/send/${id}`, {
       method: 'POST',
@@ -126,7 +128,6 @@ export default function OrderDetailPage() {
       return r.json()
     }),
     onSuccess: async () => {
-      // Auto-deliver the order when notification is sent
       try {
         await ordersApi.updateStatus(id!, 'delivered')
       } catch { /* non-fatal */ }
@@ -154,6 +155,31 @@ export default function OrderDetailPage() {
     onError: () => showToast('error', 'Failed to approve rescan'),
   })
 
+  const twinMutation = useMutation({
+    mutationFn: ({ rollId, twin }: { rollId: string; twin: string }) =>
+      fetch(`/api/rolls/${rollId}/twin-check`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({ twin_check: twin }),
+      }).then(r => {
+        if (!r.ok) return r.json().then(e => Promise.reject(e))
+        return r.json()
+      }),
+    onSuccess: () => {
+      setEditingTwin(null)
+      setTwinValue('')
+      setTwinError('')
+      showToast('success', 'Twin updated. If a scan folder is already in the Inbox under the old twin, rename it manually.')
+      invalidate()
+    },
+    onError: (err: any) => {
+      showToast('error', err?.detail || 'Failed to update twin check')
+    },
+  })
+
   if (isLoading) return <div className="p-8 text-[#444] text-sm">Loading…</div>
   if (!order) return <div className="p-8 text-[#ff4444] text-sm">Order not found</div>
 
@@ -166,7 +192,6 @@ export default function OrderDetailPage() {
   const hasBorderScan = order.border_scan === true
   const hasArchivedTwins = order.rolls?.some((r: any) => r.status === 'archived')
 
-  // Email button logic
   const notifyButtonLabel = getNotifyButtonLabel(order)
   const isDelivered = order.status === 'delivered'
   const emailFailed = order.email_status === 'failed'
@@ -177,7 +202,7 @@ export default function OrderDetailPage() {
       {/* Toast */}
       {emailToast && (
         <div className={clsx(
-          'fixed top-6 right-6 z-50 px-4 py-3 rounded-xl border text-sm font-medium shadow-lg',
+          'fixed top-6 right-6 z-50 max-w-sm px-4 py-3 rounded-xl border text-sm font-medium shadow-lg',
           emailToast.type === 'success'
             ? 'bg-green-500/10 border-green-500/30 text-green-400'
             : 'bg-red-500/10 border-red-500/30 text-red-400'
@@ -226,17 +251,18 @@ export default function OrderDetailPage() {
 
           {/* Order header card */}
           <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-6">
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div>
-                <p className="text-[#555] text-xs uppercase tracking-wider mb-1">Order</p>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-white text-xl font-bold font-mono">{order.order_number}</h1>
-                  {order.manual_entry && (
-                    <span className="px-2 py-0.5 rounded text-[11px] font-medium text-orange-300 border border-orange-500/30" style={{ backgroundColor: '#431a00' }}>
-                      Manual
-                    </span>
-                  )}
-                </div>
+
+            {/* Top row: order number chip + status */}
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-[#666] text-xs font-mono">
+                  #{order.order_number}
+                </span>
+                {order.manual_entry && (
+                  <span className="px-2 py-0.5 rounded text-[11px] font-medium text-orange-300 border border-orange-500/30" style={{ backgroundColor: '#431a00' }}>
+                    Manual
+                  </span>
+                )}
               </div>
               <span className={clsx(
                 'px-3 py-1 rounded-full text-xs font-medium border',
@@ -246,14 +272,39 @@ export default function OrderDetailPage() {
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-[#444] text-xs mb-0.5">Customer</p>
-                <p className="text-white">{order.customer_name}</p>
+            {/* Customer name — dominant heading */}
+            <h1 className="text-white text-3xl font-bold mb-1">{order.customer_name}</h1>
+
+            {/* Account — secondary chip */}
+            {order.account ? (
+              <div className="mb-5">
+                <span className="inline-block px-2.5 py-0.5 rounded-full bg-[#1f0e00] border border-[#ff6600]/25 text-[#ff6600] text-xs font-medium">
+                  {order.account}
+                </span>
               </div>
+            ) : (
+              <div className="mb-5" />
+            )}
+
+            {/* Details grid */}
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <div>
                 <p className="text-[#444] text-xs mb-0.5">Email</p>
                 <p className="text-[#888]">{order.customer_email || '—'}</p>
+              </div>
+              <div>
+                <p className="text-[#444] text-xs mb-0.5">Phone</p>
+                {order.phone_number ? (
+                  <a
+                    href={`tel:${order.phone_number}`}
+                    className="flex items-center gap-1.5 text-[#888] hover:text-white transition-colors"
+                  >
+                    <Phone size={12} className="text-[#555]" />
+                    {order.phone_number}
+                  </a>
+                ) : (
+                  <p className="text-[#444]">—</p>
+                )}
               </div>
               <div>
                 <p className="text-[#444] text-xs mb-0.5">Store</p>
@@ -279,22 +330,16 @@ export default function OrderDetailPage() {
                   <p className="text-white">{Number(turnaround) < 24 ? `${turnaround}h` : `${(Number(turnaround)/24).toFixed(1)}d`}</p>
                 </div>
               )}
-              {order.account && (
-                <div>
-                  <p className="text-[#444] text-xs mb-0.5">Account</p>
-                  <p className="text-[#ff6600]">{order.account}</p>
-                </div>
-              )}
             </div>
 
             {/* Drive link */}
             {order.drive_order_folder_url ? (
               <a href={order.drive_order_folder_url} target="_blank" rel="noopener noreferrer"
-                className="mt-4 flex items-center gap-2 text-[#ff6600] hover:text-[#ff8833] text-sm transition-colors">
+                className="mt-5 flex items-center gap-2 text-[#ff6600] hover:text-[#ff8833] text-sm transition-colors">
                 <ExternalLink size={14} /> Open Drive folder
               </a>
             ) : (
-              <div className="mt-4">
+              <div className="mt-5">
                 {showDriveInput ? (
                   <div className="flex gap-2">
                     <input
@@ -385,28 +430,86 @@ export default function OrderDetailPage() {
               )}
             </div>
             <div className="divide-y divide-[#171717]">
-              {order.rolls?.map((roll: any) => (
-                <div key={roll.id} className={clsx('flex items-center gap-4 px-5 py-3', roll.is_blank && 'bg-red-500/5')}>
-                  <input
-                    type="checkbox"
-                    checked={selectedRolls.has(roll.id)}
-                    onChange={e => {
-                      const s = new Set(selectedRolls)
-                      e.target.checked ? s.add(roll.id) : s.delete(roll.id)
-                      setSelectedRolls(s)
-                    }}
-                    className="accent-[#ff6600]"
-                  />
-                  <span className="font-mono text-white text-sm w-12">{roll.twin_check}</span>
-                  <span className="text-[#555] text-xs flex-1">{roll.service_type}</span>
-                  {roll.is_blank && (
-                    <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-[11px]">Blank</span>
-                  )}
-                  <span className={clsx('px-2 py-0.5 rounded-full text-[11px] border', STATUS_STYLES[roll.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]')}>
-                    {displayRollStatus(roll.status)}
-                  </span>
-                </div>
-              ))}
+              {order.rolls?.map((roll: any) => {
+                const isEditable = true
+                const isEditing = editingTwin === roll.id
+                return (
+                  <div key={roll.id} className={clsx('flex items-center gap-3 px-5 py-3', roll.is_blank && 'bg-red-500/5')}>
+                    <input
+                      type="checkbox"
+                      checked={selectedRolls.has(roll.id)}
+                      onChange={e => {
+                        const s = new Set(selectedRolls)
+                        e.target.checked ? s.add(roll.id) : s.delete(roll.id)
+                        setSelectedRolls(s)
+                      }}
+                      className="accent-[#ff6600]"
+                    />
+
+                    {/* Twin check — inline edit or static */}
+                    {isEditing ? (
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <input
+                          type="text"
+                          maxLength={4}
+                          value={twinValue}
+                          onChange={e => { setTwinValue(e.target.value); setTwinError('') }}
+                          className={clsx(
+                            'w-14 font-mono text-sm bg-[#0f0f0f] border rounded px-2 py-0.5 focus:outline-none',
+                            twinError ? 'border-red-500 text-red-400' : 'border-[#ff6600] text-white'
+                          )}
+                          autoFocus
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') { setEditingTwin(null); setTwinValue(''); setTwinError('') }
+                            if (e.key === 'Enter') {
+                              if (!/^\d{4}$/.test(twinValue)) { setTwinError('4 digits required'); return }
+                              twinMutation.mutate({ rollId: roll.id, twin: twinValue })
+                            }
+                          }}
+                        />
+                        <button
+                          onClick={() => {
+                            if (!/^\d{4}$/.test(twinValue)) { setTwinError('4 digits required'); return }
+                            twinMutation.mutate({ rollId: roll.id, twin: twinValue })
+                          }}
+                          disabled={twinMutation.isPending}
+                          className="text-[#ff6600] hover:text-white text-xs px-2 py-0.5 border border-[#ff6600]/30 rounded transition-colors disabled:opacity-40"
+                        >
+                          {twinMutation.isPending ? '…' : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => { setEditingTwin(null); setTwinValue(''); setTwinError('') }}
+                          className="text-[#444] hover:text-white text-xs"
+                        >
+                          Cancel
+                        </button>
+                        {twinError && <span className="text-red-400 text-[11px]">{twinError}</span>}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 flex-shrink-0 w-16">
+                        <span className="font-mono text-white text-sm">{roll.twin_check}</span>
+                        {isEditable && (
+                          <button
+                            onClick={() => { setEditingTwin(roll.id); setTwinValue(roll.twin_check); setTwinError('') }}
+                            className="text-[#2a2a2a] hover:text-[#ff6600] transition-colors ml-0.5"
+                            title="Edit twin check"
+                          >
+                            <Pencil size={11} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <span className="text-[#555] text-xs flex-1">{roll.service_type}</span>
+                    {roll.is_blank && (
+                      <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-[11px]">Blank</span>
+                    )}
+                    <span className={clsx('px-2 py-0.5 rounded-full text-[11px] border', STATUS_STYLES[roll.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]')}>
+                      {displayRollStatus(roll.status)}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
@@ -458,7 +561,6 @@ export default function OrderDetailPage() {
           <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5 space-y-3">
             <p className="text-[#555] text-xs uppercase tracking-wider">Email</p>
 
-            {/* Notify button — Dev only / Print only, not yet delivered */}
             {notifyButtonLabel && (
               <button
                 onClick={() => sendEmailMutation.mutate()}
@@ -473,7 +575,6 @@ export default function OrderDetailPage() {
               </button>
             )}
 
-            {/* Failed email — resend (red) */}
             {emailFailed && (
               <button
                 onClick={() => resendEmailMutation.mutate()}
@@ -488,7 +589,6 @@ export default function OrderDetailPage() {
               </button>
             )}
 
-            {/* Resend — always shown for delivered orders */}
             {isDelivered && !emailFailed && (
               <button
                 onClick={() => resendEmailMutation.mutate()}
@@ -503,7 +603,6 @@ export default function OrderDetailPage() {
               </button>
             )}
 
-            {/* Email status rows */}
             <div className="space-y-2 text-xs pt-1 border-t border-[#1a1a1a]">
               <div className="flex items-center justify-between">
                 <span className="text-[#555]">Delivery</span>

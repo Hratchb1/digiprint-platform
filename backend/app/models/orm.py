@@ -64,10 +64,11 @@ class Order(Base):
 
     customer_name = Column(Text, nullable=False)
     customer_email = Column(Text)
+    phone_number = Column(Text)
     account = Column(Text)
 
     order_type = Column(Text, nullable=False, default="film")
-    status = Column(Text, nullable=False, default="booked")
+    status = Column(Text, nullable=False, default="booked_in")
 
     drive_order_folder_url = Column(Text)
     scan_link = Column(Text)
@@ -95,6 +96,9 @@ class Order(Base):
     date_scanned = Column(DateTime(timezone=True))
     date_delivered = Column(DateTime(timezone=True))
     date_print_ready_notified = Column(DateTime(timezone=True))
+
+    # --- Inbound pipeline status timestamps (migration 003) ---
+    booked_in_at = Column(DateTime(timezone=True))
 
     operator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     operator_initials = Column(Text)
@@ -146,6 +150,18 @@ class OrderEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     order = relationship("Order", back_populates="events")
+
+
+class RollAuditLog(Base):
+    __tablename__ = "roll_audit_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    roll_id = Column(UUID(as_uuid=True), ForeignKey("rolls.id", ondelete="CASCADE"), nullable=False)
+    field_name = Column(Text, nullable=False)
+    old_value = Column(Text)
+    new_value = Column(Text)
+    changed_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    changed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Vendor(Base):

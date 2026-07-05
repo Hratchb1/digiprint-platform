@@ -1,0 +1,442 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="x-apple-disable-message-reformatting" />
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
+<meta name="color-scheme" content="light only" />
+<meta name="supported-color-schemes" content="light only" />
+<title>An update on your order · digiDirect</title>
+
+{#
+  ===============================================================================
+  ROLLCALL EMAIL TEMPLATE — BLANK NOTIFICATION (v4)
+  ===============================================================================
+  Goodwill / apology email for orders where rolls came back blank.
+  Empathetic tone, no promotion, no cross-sell tiles, no Google review CTA.
+
+  Preserves the full content value of the original blank_notification.html:
+   - 5 cause cards (extreme underexposure, unshot roll, camera opened mid-roll,
+     shutter didn't fire, film didn't load)
+   - Troubleshoot CTA (reply-to with camera details)
+   - 3-step "what happens now" with service-charge waiver
+   - Processing-fee notice
+   - Soft sign-off
+
+  ASSET HOSTING — Supabase public bucket "email-assets"
+    Base URL: https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets
+
+  VARIABLES IN USE:
+    {{ first_name }}, {{ customer_name }}, {{ order_number }},
+    {{ account_number }}, {{ invoice_date }}, {{ store_name }},
+    {{ blank_roll_count }},
+    {{ has_scans }}, {{ has_prints }}, {{ has_border }}, {{ has_contact }},
+    {{ service_label }}, {{ twin_check_range }},
+    {{ store_address_line }}, {{ store_reply_email }},
+    {{ store_hours_label }}
+  ===============================================================================
+#}
+
+<!--[if mso]>
+<noscript>
+  <xml>
+    <o:OfficeDocumentSettings>
+      <o:PixelsPerInch>96</o:PixelsPerInch>
+      <o:AllowPNG/>
+    </o:OfficeDocumentSettings>
+  </xml>
+</noscript>
+<style>
+  body, table, td, p, a, li, blockquote { font-family: 'Helvetica Neue', Arial, sans-serif !important; }
+  table { border-collapse: collapse !important; }
+</style>
+<![endif]-->
+
+<style type="text/css">
+  body { margin:0 !important; padding:0 !important; width:100% !important; min-width:100% !important; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  table { border-collapse:collapse !important; mso-table-lspace:0pt; mso-table-rspace:0pt; }
+  img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; display:block; }
+  a { text-decoration:none; }
+  a[x-apple-data-detectors] { color:inherit !important; text-decoration:none !important; }
+  .preheader { display:none !important; visibility:hidden; mso-hide:all; font-size:1px; color:#f4f1ec; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden; }
+  @media only screen and (max-width: 600px) {
+    .container { width:100% !important; max-width:100% !important; }
+    .px-mobile { padding-left:24px !important; padding-right:24px !important; }
+    .py-mobile-sm { padding-top:24px !important; padding-bottom:24px !important; }
+    .stack { display:block !important; width:100% !important; max-width:100% !important; }
+    .stack-cell { display:block !important; width:100% !important; max-width:100% !important; padding:0 0 16px 0 !important; }
+    .h1-mobile { font-size:34px !important; line-height:1.1 !important; }
+    .h2-mobile { font-size:20px !important; line-height:1.2 !important; }
+    .body-mobile { font-size:15px !important; line-height:1.55 !important; }
+    .center-mobile { text-align:center !important; }
+  }
+</style>
+</head>
+<body bgcolor="#f4f1ec" style="margin:0; padding:0; background-color:#f4f1ec;">
+
+<!-- Preheader -->
+<div class="preheader">An update on your recent film order — please open when you have a moment. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+
+<!-- Outer wrapper -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f1ec" style="background:#f4f1ec;">
+  <tr>
+    <td align="center" valign="top" style="padding:0;">
+
+      <!-- 600px container -->
+      <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:600px; max-width:600px; background:#ffffff;">
+
+        <!-- ============================================================
+             BLOCK 1 + 2 — Brand bar + Hero (BLACK) · empathetic
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" style="background:#0e0e0e; padding:0;">
+
+            <!-- digiDirect logo, centred -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" style="padding:32px 24px 8px 24px;">
+                  <a href="https://www.digidirect.com.au" target="_blank" style="text-decoration:none;">
+                    <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/digidirect-logo-white.png" width="160" height="32" alt="digiDirect" style="display:block; width:160px; max-width:160px; height:32px;" />
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Hero copy -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" style="padding:32px 40px 56px 40px;" class="px-mobile">
+                  <p style="margin:0 0 14px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ff7a1a; line-height:1;">An update on your order</p>
+                  <h1 class="h1-mobile" style="margin:0 0 18px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:42px; line-height:1.1; font-weight:300; letter-spacing:-1px; color:#ffffff;">Hi {{ first_name }},</h1>
+                  <p class="body-mobile" style="margin:0 0 14px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:16px; line-height:1.6; color:#adaaaa;">
+                    We're sorry to reach out with disappointing news. Unfortunately, <strong style="color:#ffffff;">{{ blank_roll_count }} roll{{ 's' if blank_roll_count != 1 else '' }}</strong> from your order {{ order_number }} turned out blank.
+                  </p>
+                  <p class="body-mobile" style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; line-height:1.6; color:#6b6864;">
+                    We understand how disheartening this can be, particularly if {{ 'those rolls' if blank_roll_count != 1 else 'that roll' }} held meaningful memories. Your film was handled with the same care we give every order.
+                  </p>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 3 — Why this might happen (LIGHT) · 5 cause cards
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#faf7f2" style="background:#faf7f2; padding:40px 32px 24px 32px;" class="px-mobile py-mobile-sm">
+
+            <!-- Section eyebrow -->
+            <p style="margin:0 0 18px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Why would my film turn out blank?</p>
+
+            <!-- Cause cards container -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;">
+              <tr>
+                <td style="padding:8px 24px;">
+
+                  <!-- Cause 1: Underexposure -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #f0ebe1;">
+                    <tr>
+                      <td valign="top" width="44" style="width:44px; padding:18px 14px 18px 0;">
+                        <div style="width:32px; height:32px; border-radius:8px; background-color:#faf7f2; text-align:center; padding-top:8px; line-height:0;">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;"><circle cx="8" cy="8" r="6.5" stroke="#9a948b" stroke-width="1.2"/><path d="M5.5 6C5.5 4.619 6.619 3.5 8 3.5s2.5 1.119 2.5 2.5c0 1.5-2.5 2-2.5 3.5" stroke="#9a948b" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="12" r="0.6" fill="#9a948b"/></svg>
+                        </div>
+                      </td>
+                      <td valign="top" style="padding:18px 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">Extreme underexposure</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#6b6864;">Very fast shutter, a very small aperture, or ISO set far too high can leave frames effectively blank.</p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td valign="top" style="padding:2px 8px 0 0;"><span style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:9px; font-weight:bold; letter-spacing:0.5px; text-transform:uppercase; color:#ff7a1a; background:rgba(255,122,26,0.08); border:1px solid rgba(255,122,26,0.2); padding:2px 7px; border-radius:3px;">Tip</span></td>
+                          <td valign="top" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">Match ISO to the film box speed and use a light meter or auto mode in low light. If this was a disposable camera, photos were most likely taken in low light without flash.</td>
+                        </tr></table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Cause 2: Unshot roll -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #f0ebe1;">
+                    <tr>
+                      <td valign="top" width="44" style="width:44px; padding:18px 14px 18px 0;">
+                        <div style="width:32px; height:32px; border-radius:8px; background-color:#faf7f2; text-align:center; padding-top:8px; line-height:0;">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;"><rect x="2" y="2" width="12" height="12" rx="2" stroke="#9a948b" stroke-width="1.2"/><circle cx="8" cy="8" r="2.5" stroke="#9a948b" stroke-width="1.2"/><circle cx="8" cy="8" r="0.8" fill="#9a948b"/></svg>
+                        </div>
+                      </td>
+                      <td valign="top" style="padding:18px 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">Unshot roll was developed</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#6b6864;">A fresh roll got processed by mistake. The result is completely clear film with edge markings only.</p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td valign="top" style="padding:2px 8px 0 0;"><span style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:9px; font-weight:bold; letter-spacing:0.5px; text-transform:uppercase; color:#ff7a1a; background:rgba(255,122,26,0.08); border:1px solid rgba(255,122,26,0.2); padding:2px 7px; border-radius:3px;">Tip</span></td>
+                          <td valign="top" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">Mark exposed rolls clearly and keep fresh rolls in their canisters until ready to shoot.</td>
+                        </tr></table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Cause 3: Camera opened mid-roll -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #f0ebe1;">
+                    <tr>
+                      <td valign="top" width="44" style="width:44px; padding:18px 14px 18px 0;">
+                        <div style="width:32px; height:32px; border-radius:8px; background-color:#faf7f2; text-align:center; padding-top:8px; line-height:0;">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;"><path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="#9a948b" stroke-width="1.2"/><path d="M6 3V2M10 3V2" stroke="#9a948b" stroke-width="1.2" stroke-linecap="round"/><path d="M5 8l2 2 4-4" stroke="#9a948b" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                      </td>
+                      <td valign="top" style="padding:18px 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">Camera opened mid-roll</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#6b6864;">Opening the camera back floods the film with light. You might see uniform fog rather than images.</p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td valign="top" style="padding:2px 8px 0 0;"><span style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:9px; font-weight:bold; letter-spacing:0.5px; text-transform:uppercase; color:#ff7a1a; background:rgba(255,122,26,0.08); border:1px solid rgba(255,122,26,0.2); padding:2px 7px; border-radius:3px;">Tip</span></td>
+                          <td valign="top" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">Only open the back after fully rewinding the film.</td>
+                        </tr></table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Cause 4: Shutter didn't fire -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #f0ebe1;">
+                    <tr>
+                      <td valign="top" width="44" style="width:44px; padding:18px 14px 18px 0;">
+                        <div style="width:32px; height:32px; border-radius:8px; background-color:#faf7f2; text-align:center; padding-top:8px; line-height:0;">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;"><rect x="2" y="5" width="12" height="7" rx="1.5" stroke="#9a948b" stroke-width="1.2"/><path d="M5 5V4a3 3 0 016 0v1" stroke="#9a948b" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="8.5" r="1" fill="#9a948b"/></svg>
+                        </div>
+                      </td>
+                      <td valign="top" style="padding:18px 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">Shutter didn't fire or is stuck</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#6b6864;">A mechanical fault or a low battery on electronic shutters can prevent any exposure.</p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td valign="top" style="padding:2px 8px 0 0;"><span style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:9px; font-weight:bold; letter-spacing:0.5px; text-transform:uppercase; color:#ff7a1a; background:rgba(255,122,26,0.08); border:1px solid rgba(255,122,26,0.2); padding:2px 7px; border-radius:3px;">Tip</span></td>
+                          <td valign="top" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">Replace the battery and fire a few test shots before loading your next roll.</td>
+                        </tr></table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Cause 5: Film didn't load (no bottom border on last) -->
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td valign="top" width="44" style="width:44px; padding:18px 14px 18px 0;">
+                        <div style="width:32px; height:32px; border-radius:8px; background-color:#faf7f2; text-align:center; padding-top:8px; line-height:0;">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;"><rect x="1" y="4" width="14" height="9" rx="1.5" stroke="#9a948b" stroke-width="1.2"/><rect x="1" y="6.5" width="2" height="1.2" rx="0.3" fill="#9a948b"/><rect x="13" y="6.5" width="2" height="1.2" rx="0.3" fill="#9a948b"/><rect x="1" y="9" width="2" height="1.2" rx="0.3" fill="#9a948b"/><rect x="13" y="9" width="2" height="1.2" rx="0.3" fill="#9a948b"/><rect x="5" y="5.5" width="6" height="6" rx="0.8" fill="none" stroke="#9a948b" stroke-width="0.8"/></svg>
+                        </div>
+                      </td>
+                      <td valign="top" style="padding:18px 0;">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">Film didn't load or advance</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#6b6864;">The leader didn't catch on the take-up spool. The counter moved, but the film never actually advanced.</p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td valign="top" style="padding:2px 8px 0 0;"><span style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:9px; font-weight:bold; letter-spacing:0.5px; text-transform:uppercase; color:#ff7a1a; background:rgba(255,122,26,0.08); border:1px solid rgba(255,122,26,0.2); padding:2px 7px; border-radius:3px;">Tip</span></td>
+                          <td valign="top" style="font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">After loading, gently tug the rewind knob — resistance means the film is advancing correctly.</td>
+                        </tr></table>
+                      </td>
+                    </tr>
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 4 — Troubleshoot CTA (LIGHT) · quoted block
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#faf7f2" style="background:#faf7f2; padding:0 32px 32px 32px;" class="px-mobile">
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;">
+              <tr>
+                <td bgcolor="#ff7a1a" width="3" style="background:#ff7a1a; width:3px; line-height:0; font-size:0;">&nbsp;</td>
+                <td style="padding:18px 22px;">
+                  <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.65; color:#6b6864;"><strong style="color:#0e0e0e;">Still unsure?</strong>
+                    {% if store_reply_email %}
+                    <a href="mailto:{{ store_reply_email }}?subject=Order%20{{ order_number }}%20-%20Blank%20roll%20enquiry" style="color:#f96400; font-weight:bold; text-decoration:underline;">Reply to this email</a>
+                    {% else %}
+                    Reply to this email
+                    {% endif %}
+                    with your camera model and any details you remember — ISO, mode, lighting conditions. The {{ store_name }} lab will take a closer look and help troubleshoot.
+                  </p>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 5 — What happens now (BLACK) · 3 numbered steps + waiver
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" style="background:#0e0e0e; padding:36px 40px;" class="px-mobile">
+
+            <p style="margin:0 0 22px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ff7a1a;">What happens now</p>
+
+            <!-- Step 1 -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #1f1f1f;">
+              <tr>
+                <td valign="top" width="44" style="width:44px; padding:14px 14px 14px 0;">
+                  <div style="width:28px; height:28px; border-radius:50%; background-color:#ff7a1a; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; font-weight:bold; color:#ffffff; text-align:center; line-height:28px;">1</div>
+                </td>
+                <td valign="top" style="padding:14px 0;">
+                  <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#ffffff;">Come back in with your next roll</p>
+                  <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#adaaaa;">Drop off your next film at digiDirect {{ store_name }} as you normally would.</p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Step 2 -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #1f1f1f;">
+              <tr>
+                <td valign="top" width="44" style="width:44px; padding:14px 14px 14px 0;">
+                  <div style="width:28px; height:28px; border-radius:50%; background-color:#ff7a1a; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; font-weight:bold; color:#ffffff; text-align:center; line-height:28px;">2</div>
+                </td>
+                <td valign="top" style="padding:14px 0;">
+                  <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#ffffff;">Present this email at the counter</p>
+                  <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.55; color:#adaaaa;">Show this email to our team when you drop off your film and we'll take care of the rest.</p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Step 3 -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" width="44" style="width:44px; padding:14px 14px 14px 0;">
+                  <div style="width:28px; height:28px; border-radius:50%; background-color:#ff7a1a; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; font-weight:bold; color:#ffffff; text-align:center; line-height:28px;">3</div>
+                </td>
+                <td valign="top" style="padding:14px 0;">
+                  <p style="margin:0 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#ffffff;">We'll waive your service charges</p>
+                  <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; line-height:1.6; color:#adaaaa;">
+                    We won't charge you for your
+                    {% if has_scans %}<span style="display:inline-block; font-size:11px; font-weight:bold; color:#ff7a1a; background:rgba(255,122,26,0.12); border:1px solid rgba(255,122,26,0.3); padding:1px 7px; border-radius:3px; line-height:1.4; margin:0 2px;">Scanning</span>{% endif %}
+                    {% if has_prints %}<span style="display:inline-block; font-size:11px; font-weight:bold; color:#ff7a1a; background:rgba(255,122,26,0.12); border:1px solid rgba(255,122,26,0.3); padding:1px 7px; border-radius:3px; line-height:1.4; margin:0 2px;">Printing</span>{% endif %}
+                    {% if has_border %}<span style="display:inline-block; font-size:11px; font-weight:bold; color:#ff7a1a; background:rgba(255,122,26,0.12); border:1px solid rgba(255,122,26,0.3); padding:1px 7px; border-radius:3px; line-height:1.4; margin:0 2px;">Bordered Scans</span>{% endif %}
+                    {% if has_contact %}<span style="display:inline-block; font-size:11px; font-weight:bold; color:#ff7a1a; background:rgba(255,122,26,0.12); border:1px solid rgba(255,122,26,0.3); padding:1px 7px; border-radius:3px; line-height:1.4; margin:0 2px;">Contact Sheet</span>{% endif %}
+                    on your next order. No need to ask — just show this email.
+                  </p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Processing fee notice -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#1a1a1a" style="background:#1a1a1a; margin-top:18px;">
+              <tr>
+                <td style="padding:12px 16px;">
+                  <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; line-height:1.55; color:#9a948b;">Please note that a <strong style="color:#adaaaa;">standard processing fee will still apply</strong> — we did develop your {{ 'rolls' if blank_roll_count != 1 else 'roll' }}, and that cost remains. Only the service charges listed above will be waived.</p>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 6 — Collection point + Order details (WHITE)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#ffffff" style="background:#ffffff; padding:48px 40px; border-top:1px solid #e9e5dd;" class="px-mobile">
+
+            <!-- Collection point -->
+            <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Where to drop your next roll</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#faf7f2" style="background:#faf7f2;">
+              <tr>
+                <td style="padding:24px;">
+
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td valign="top" width="32" style="width:32px; padding:2px 12px 0 0;">
+                        <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/icon-pin-orange.png" width="20" height="20" alt="" style="display:block; width:20px; height:20px;" />
+                      </td>
+                      <td valign="top">
+                        <p style="margin:0 0 4px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:15px; font-weight:bold; color:#0e0e0e;">digiDirect {{ store_name }}</p>
+                        <p style="margin:0 0 8px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#6b6864;">{{ store_address_line|default('Address available in-store') }}</p>
+                        <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#f96400;">{{ store_hours_label|default('Open 7 days') }}</p>
+                      </td>
+                    </tr>
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+
+            <!-- Order details -->
+            <p style="margin:36px 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; text-transform:uppercase; color:#6b6864;">Order details</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Customer</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ customer_name }}</td>
+              </tr>
+              {% if account_number %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Account number</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ account_number }}</td>
+              </tr>
+              {% endif %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Order number</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ order_number }}</td>
+              </tr>
+              {% if service_label %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Service</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ service_label }}</td>
+              </tr>
+              {% endif %}
+              {% if twin_check_range %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Twin checks</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ twin_check_range }}</td>
+              </tr>
+              {% endif %}
+              <tr>
+                <td style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Blank rolls</td>
+                <td align="right" style="padding:12px 0; border-bottom:1px solid #e9e5dd; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#f96400;">{{ blank_roll_count }}</td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#6b6864;">Processed</td>
+                <td align="right" style="padding:12px 0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; font-weight:bold; color:#0e0e0e;">{{ invoice_date }}</td>
+              </tr>
+            </table>
+
+            <!-- Soft sign-off -->
+            <p style="margin:36px 0 6px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:14px; line-height:1.55; color:#6b6864; font-style:italic;">We're sorry we couldn't bring your images home this time.</p>
+            <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#9a948b;">— The team at digiDirect {{ store_name }}</p>
+
+          </td>
+        </tr>
+
+        <!-- ============================================================
+             BLOCK 7 — Footer (BLACK)
+             ============================================================ -->
+        <tr>
+          <td bgcolor="#0e0e0e" align="center" style="background:#0e0e0e; padding:24px 32px;">
+
+            <a href="https://www.digidirect.com.au" target="_blank" style="text-decoration:none;">
+              <img src="https://tyffpxxfeqdojbpedkwj.supabase.co/storage/v1/object/public/email-assets/digidirect-logo-white.png" width="100" height="20" alt="digiDirect" style="display:inline-block; width:100px; max-width:100px; height:20px; margin:0 0 14px;" />
+            </a>
+
+            <p style="margin:0 0 12px; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:10px; font-weight:bold; letter-spacing:1.5px; line-height:1.6;">
+              <a href="https://www.digidirect.com.au/contact" target="_blank" style="color:#adaaaa; text-decoration:none;">Contact Us</a>
+              <span style="color:#262626;">&nbsp;·&nbsp;</span>
+              <a href="https://www.digidirect.com.au/privacy" target="_blank" style="color:#adaaaa; text-decoration:none;">Privacy Policy</a>
+              <span style="color:#262626;">&nbsp;·&nbsp;</span>
+              <a href="https://www.digidirect.com.au/terms" target="_blank" style="color:#adaaaa; text-decoration:none;">Terms and Conditions</a>
+            </p>
+
+            <p style="margin:0; font-family:'Proxima Nova','Helvetica Neue',Arial,sans-serif; font-size:11px; line-height:1.6; color:#adaaaa;">This email was sent by Digital Imaging Express Pty. Ltd. digiDirect Australia. All rights reserved, (ABN 92 122 703 806).</p>
+
+          </td>
+        </tr>
+
+      </table>
+      <!-- /container -->
+
+    </td>
+  </tr>
+</table>
+<!-- /outer wrapper -->
+
+</body>
+</html>

@@ -13,8 +13,11 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Statuses that free up twin checks for reuse
-TWIN_EXPIRY_STATUSES = {"delivered", "blank", "devready", "printready"}
+# Statuses that free up twin checks for reuse — terminal order states only
+TWIN_EXPIRY_STATUSES = {"delivered", "cancelled", "discarded"}
+
+# Order statuses considered "in progress" for dashboard pending/overdue counts
+PENDING_STATUSES = ["booked_in", "scanning"]
 
 # SKUs that set addon service flags on orders
 ADDON_SKU_FLAGS = {
@@ -33,6 +36,29 @@ class OrderService:
         if dups:
             raise ValueError(f"Twin checks already exist in this store: {', '.join(dups)}")
 
+        # Guard: if an inbound order already exists with this order_number, promote
+        # it instead of inserting a duplicate. Covers any caller that doesn't go
+        # through the dup-modal/add-rolls path in the Intake UI.
+        existing_inbound = await self._get_inbound_order_by_number(db, payload.order_number, payload.store_id)
+        if existing_inbound:
+            for roll_data in payload.rolls:
+                roll = Roll(
+                    order_id=existing_inbound.id,
+                    store_id=payload.store_id,
+                    twin_check=roll_data.twin_check,
+                    service_type=roll_data.service_type.value,
+                    operator_initials=payload.operator_initials,
+                )
+                db.add(roll)
+
+            await self._promote_inbound_to_booked_in(
+                db, existing_inbound, actor_label=actor_label,
+                roll_count=len(payload.rolls), source="create_order_guard",
+            )
+            await db.commit()
+            await db.refresh(existing_inbound)
+            return existing_inbound
+
         # Check pronto_cache for addon SKUs BEFORE creating the order
         # so the flags are set correctly in the initial API response
         addon_flags = self._get_addon_flags_from_pronto(payload.order_number)
@@ -42,6 +68,7 @@ class OrderService:
             store_id=payload.store_id,
             customer_name=payload.customer_name,
             customer_email=payload.customer_email,
+            phone_number=getattr(payload, "customer_phone", None),
             account=payload.account,
             order_type=payload.order_type.value,
             operator_initials=payload.operator_initials,
@@ -72,8 +99,8 @@ class OrderService:
                 f"rebate_scan={addon_flags.get('rebate_scan')}"
             )
 
-        await self._log_event(db, order.id, "booked",
-                              f"Order booked with {len(payload.rolls)} roll(s)",
+        await self._log_event(db, order.id, "booked_in",
+                              f"Order booked in with {len(payload.rolls)} roll(s)",
                               actor_label=actor_label,
                               metadata={"roll_count": len(payload.rolls), "twins": new_twins})
         await db.commit()
@@ -122,6 +149,34 @@ class OrderService:
         q = q.options(selectinload(Order.rolls), selectinload(Order.store))
         result = await db.execute(q)
         return result.scalar_one_or_none()
+
+    async def _get_inbound_order_by_number(self, db: AsyncSession, order_number: str, store_id: UUID) -> Optional[Order]:
+        result = await db.execute(
+            select(Order)
+            .options(selectinload(Order.rolls))
+            .where(and_(
+                Order.order_number == order_number,
+                Order.store_id == store_id,
+                Order.status == "inbound",
+            ))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _promote_inbound_to_booked_in(
+        self, db: AsyncSession, order: Order, actor_label: str = "system",
+        roll_count: Optional[int] = None, source: str = "intake_form",
+    ) -> None:
+        """Promote an inbound order to booked_in and log the activity event."""
+        order.status = "booked_in"
+        order.booked_in_at = datetime.utcnow()
+        await self._log_event(
+            db, order.id, "order_booked_in",
+            f"Inbound order promoted to booked_in"
+            + (f" — {roll_count} roll(s) added" if roll_count else ""),
+            actor_label=actor_label,
+            metadata={"source": source, "roll_count": roll_count},
+        )
 
     async def list_orders(self, db: AsyncSession, store_id: Optional[UUID] = None, status: Optional[str] = None, search: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Order]:
         q = (
@@ -237,7 +292,10 @@ class OrderService:
 
         order.has_blanks = True
         if all(r.is_blank for r in order.rolls):
-            order.status = "blank"
+            # "blank" is no longer a valid order-level status (migration 003) —
+            # an all-blank order is terminal, so it maps to delivered.
+            order.status = "delivered"
+            order.date_delivered = datetime.utcnow()
 
         await self._log_event(db, order_id, "blanks_marked",
                               f"{len(blank_twins)} roll(s) marked blank",
@@ -254,8 +312,8 @@ class OrderService:
 
         order.drive_order_folder_url = drive_url
         order.date_scanned = datetime.utcnow()
-        if order.status == "booked":
-            order.status = "scanned"
+        if order.status == "booked_in":
+            order.status = "scanning"
 
         await self._log_event(db, order_id, "drive_link_set", "Drive folder link set",
                               actor_label=actor_label, metadata={"url": drive_url})
@@ -271,11 +329,11 @@ class OrderService:
 
         total = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter)))
         delivered = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.status == "delivered")))
-        pending = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.status.in_(["booked", "processing", "scanned"]))))
+        pending = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.status.in_(PENDING_STATUSES))))
         blanks = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.has_blanks == True)))
 
         overdue_cutoff = datetime.utcnow() - timedelta(hours=48)
-        overdue_filter = [Order.created_at < overdue_cutoff, Order.status.in_(["booked", "processing", "scanned"])]
+        overdue_filter = [Order.created_at < overdue_cutoff, Order.status.in_(PENDING_STATUSES)]
         if store_id:
             overdue_filter.append(Order.store_id == store_id)
         overdue = await db.scalar(select(func.count(Order.id)).where(and_(*overdue_filter)))

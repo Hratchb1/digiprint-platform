@@ -50,7 +50,9 @@ echo  API Docs : http://localhost:8000/docs
 echo.
 
 :: Start backend in new window
-start "digiPrint Backend" cmd /k "python -m uvicorn backend.main:app --reload --port 8000"
+cd backend
+start "digiPrint Backend" cmd /k "python -m uvicorn app.main:app --reload --port 8000"
+cd ..
 
 :: Wait a moment then start frontend
 timeout /t 2 /nobreak >nul

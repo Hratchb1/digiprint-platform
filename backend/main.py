@@ -13,8 +13,7 @@ from .db.database import engine
 from .models import Base
 
 # Create all tables on startup (safe to run multiple times)
-Base.metadata.create_all(bind=engine)
-
+# Base.metadata.create_all(bind=engine)  # Tables managed by migrations
 app = FastAPI(
     title="digiPrint Platform",
     description="Film processing & B2B order management for digiDirect",

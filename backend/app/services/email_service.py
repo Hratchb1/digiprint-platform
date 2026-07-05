@@ -3,7 +3,7 @@ import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from supabase import create_client
 from app.core.config import settings
@@ -38,6 +38,15 @@ SUBJECT_MAP = {
 }
 
 # ---------------------------------------------------------------------------
+# Frames-per-roll assumption
+# ---------------------------------------------------------------------------
+# NOTE: schema currently has no per-roll frame count column. We default to 36
+# because 35mm 36-exp is by far the dominant lab format. If/when a `frame_count`
+# column is added to the rolls table, replace _compute_frames_count below.
+DEFAULT_FRAMES_PER_ROLL = 36
+
+
+# ---------------------------------------------------------------------------
 # Helper — name formatting
 # ---------------------------------------------------------------------------
 def _title_name(name: Optional[str]) -> str:
@@ -50,17 +59,25 @@ def _title_name(name: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 # Helper — expiry date string
 # ---------------------------------------------------------------------------
+def _format_date_long(dt: datetime) -> str:
+    """Format a date as e.g. '3 April 2026'. %-d is not portable (crashes on Windows)."""
+    return f"{dt.day} {dt.strftime('%B %Y')}"
+
+
 def _expiry_str(base_date: datetime, days: int) -> str:
     """Return a human-readable expiry date string."""
-    expiry = base_date + timedelta(days=days)
-    return expiry.strftime("%-d %B %Y")  # e.g. 3 April 2026
+    return _format_date_long(base_date + timedelta(days=days))
 
 
 # ---------------------------------------------------------------------------
-# Helper — fetch store settings
+# Helper — fetch store settings (storage policy + branding)
 # ---------------------------------------------------------------------------
 def _get_store_settings(store_id: str) -> dict:
-    """Fetch storage policy and review URL from store_settings."""
+    """
+    Fetch storage policy, review URL, and email branding fields from store_settings.
+    Branding fields (address_line, reply_email, hours_label, instagram_url) are
+    optional — the template falls back gracefully when they're absent.
+    """
     try:
         sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
         result = sb.table("store_settings").select("*").eq("store_id", store_id).single().execute()
@@ -74,6 +91,10 @@ def _get_store_settings(store_id: str) -> dict:
         "negative_storage_days": 30,
         "drive_storage_days": 90,
         "google_review_url": None,
+        "address_line": None,
+        "reply_email": None,
+        "hours_label": None,
+        "instagram_url": None,
     }
 
 
@@ -140,6 +161,90 @@ def _get_drive_config(store_id: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Helper — fetch rolls for an order (lazy — only when not already on order dict)
+# ---------------------------------------------------------------------------
+def _get_order_rolls(order: dict) -> List[dict]:
+    """
+    Returns the rolls list for an order. Prefers the rolls already on the
+    order dict (when called from the FastAPI router with _enrich()), falls
+    back to a Supabase fetch by order_id (when called from drive_watcher
+    or send_manual_email).
+    """
+    rolls = order.get("rolls")
+    if rolls:
+        return rolls
+
+    order_id = order.get("id")
+    if not order_id:
+        return []
+
+    try:
+        sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        result = (
+            sb.table("rolls")
+            .select("id, twin_check, service_type, status, is_blank")
+            .eq("order_id", order_id)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"Could not fetch rolls for order {order_id}: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Helper — derived counts and labels for v4 templates
+# ---------------------------------------------------------------------------
+def _compute_rolls_count(rolls: List[dict]) -> int:
+    """Count of non-blank rolls — what the customer is actually receiving."""
+    return sum(1 for r in rolls if not r.get("is_blank"))
+
+
+def _compute_frames_count(rolls_count: int) -> int:
+    """
+    Estimated frame count. See DEFAULT_FRAMES_PER_ROLL note above —
+    swap to a real per-roll column when schema supports it.
+    """
+    return rolls_count * DEFAULT_FRAMES_PER_ROLL if rolls_count else 0
+
+
+def _compute_twin_check_range(rolls: List[dict]) -> Optional[str]:
+    """
+    Compress the order's twin checks into a single human label:
+      one twin           -> "0042"
+      multiple, in range -> "0042-0045"
+      no rolls           -> None
+    Twin checks are zero-padded text so lexicographic order == numeric order.
+    """
+    twins = sorted({(r.get("twin_check") or "").strip() for r in rolls if r.get("twin_check")})
+    if not twins:
+        return None
+    if len(twins) == 1 or twins[0] == twins[-1]:
+        return twins[0]
+    return f"{twins[0]}-{twins[-1]}"
+
+
+def _compute_service_label(order_type: Optional[str]) -> Optional[str]:
+    """
+    Map the internal order_type code to a customer-facing label.
+    Falls back to a Title-Case version of the input for unknown codes.
+    """
+    if not order_type:
+        return None
+
+    key = order_type.strip()
+    label_map = {
+        "Dev only":        "Develop only",
+        "Dev+Scan":        "Develop & Scan",
+        "Dev+Scan+Print":  "Develop, Scan & Print",
+        "Dev+Print":       "Develop & Print",
+        "Scan only":       "Scan only",
+        "Print only":      "Print only",
+    }
+    return label_map.get(key, key.title())
+
+
+# ---------------------------------------------------------------------------
 # Core send function
 # ---------------------------------------------------------------------------
 def send_order_email(
@@ -151,7 +256,8 @@ def send_order_email(
     Render and send a customer email for an order.
 
     Args:
-        order:        Enriched order dict (from _enrich() in orders.py)
+        order:        Enriched order dict (from _enrich() in orders.py,
+                      or from a Supabase fetch in send_manual_email).
         template_key: One of the keys in TEMPLATE_MAP
         drive_url:    Optional — Drive folder URL injected by watcher
 
@@ -184,14 +290,20 @@ def send_order_email(
     except Exception:
         base_date = datetime.utcnow()
 
-    invoice_date_str = base_date.strftime("%-d %B %Y")
+    invoice_date_str = _format_date_long(base_date)
 
-    # --- Store settings (storage policy + review URL) ---
+    # --- Store settings (storage policy + review URL + email branding) ---
     store_settings = _get_store_settings(store_id) if store_id else {}
-    print_days    = store_settings.get("print_storage_days", 30)
-    negative_days = store_settings.get("negative_storage_days", 30)
-    drive_days    = store_settings.get("drive_storage_days", 90)
+    print_days        = store_settings.get("print_storage_days", 30)
+    negative_days     = store_settings.get("negative_storage_days", 30)
+    drive_days        = store_settings.get("drive_storage_days", 90)
     google_review_url = store_settings.get("google_review_url")
+
+    # New (v4) branding fields — all optional, template falls back gracefully
+    store_address_line  = store_settings.get("address_line")
+    store_reply_email   = store_settings.get("reply_email")
+    store_hours_label   = store_settings.get("hours_label")
+    store_instagram_url = store_settings.get("instagram_url")
 
     # --- Expiry dates ---
     drive_expiry    = _expiry_str(base_date, drive_days)
@@ -204,6 +316,15 @@ def send_order_email(
     has_prints   = "print" in service_type
     has_border   = bool(order.get("border_scan"))
     has_contact  = bool(order.get("contact_sheet"))
+
+    # --- Rolls-derived stats (rolls_count, frames_count, twin_check_range) ---
+    rolls = _get_order_rolls(order)
+    rolls_count       = _compute_rolls_count(rolls)
+    frames_count      = _compute_frames_count(rolls_count)
+    twin_check_range  = _compute_twin_check_range(rolls)
+
+    # --- Service label (customer-facing version of order_type) ---
+    service_label = _compute_service_label(order.get("order_type"))
 
     # --- Promotions ---
     promotions = _get_active_promotions()
@@ -248,6 +369,17 @@ def send_order_email(
             google_review_url=google_review_url,
             # Blank roll
             blank_roll_count=order.get("blank_roll_count") or 0,
+            # ── v4 additions ──
+            # Order-level derived stats
+            rolls_count=rolls_count or None,
+            frames_count=frames_count or None,
+            service_label=service_label,
+            twin_check_range=twin_check_range,
+            # Per-store branding
+            store_address_line=store_address_line,
+            store_reply_email=store_reply_email,
+            store_hours_label=store_hours_label,
+            store_instagram_url=store_instagram_url,
         )
     except Exception as e:
         logger.error(f"Template render failed for {template_key}: {e}")
@@ -257,6 +389,15 @@ def send_order_email(
     if not customer_email:
         logger.warning(f"No customer email for order {order_number} — skipping send")
         return False
+
+    # PAUSE_EMAILS=1 suppresses real SMTP sends (dev/testing) but reports
+    # success so downstream status flows behave exactly as a real send.
+    if settings.PAUSE_EMAILS:
+        logger.warning(
+            f"[PAUSE_EMAILS] Send suppressed: {template_key} → {customer_email} "
+            f"(order {order_number}) — treating as success"
+        )
+        return True
 
     drive_config = _get_drive_config(store_id) if store_id else None
     if not drive_config:
@@ -335,10 +476,10 @@ async def send_manual_email(
         result = (
             sb.table("orders")
             .select(
-                "id, order_number, order_type, order_date, created_at, status, "
+                "id, order_number, order_type, pronto_order_date, created_at, status, "
                 "customer_name, customer_email, account, store_id, "
                 "drive_order_folder_url, border_scan, contact_sheet, rebate_scan, "
-                "has_blanks, blank_roll_count, email_status"
+                "has_blanks, email_status"
             )
             .eq("id", order_id)
             .single()
@@ -353,6 +494,8 @@ async def send_manual_email(
         return False
 
     order = result.data
+    # send_order_email reads order_date for the invoice date line
+    order["order_date"] = order.get("pronto_order_date")
 
     # Fetch store name
     store_id = order.get("store_id")
@@ -369,17 +512,23 @@ async def send_manual_email(
     # Resolve template key
     template_key = template_override if template_override in TEMPLATE_MAP else _derive_template_key(order)
 
-    # Send
+    # Send (rolls are fetched lazily inside send_order_email via _get_order_rolls)
     success = send_order_email(order=order, template_key=template_key)
 
     # Log result to email_log
     try:
+        customer_name = _title_name(order.get("customer_name"))
+        first_name = customer_name.split()[0] if customer_name != "there" else "there"
+        subject = SUBJECT_MAP.get(template_key, "An update on your order").format(
+            first_name=first_name,
+            order_number=order.get("order_number") or "—",
+        )
         sb.table("email_log").insert({
             "order_id": order_id,
-            "template_key": template_key,
-            "recipient": order.get("customer_email"),
+            "email_type": template_key,
+            "recipient": order.get("customer_email") or "unknown",
+            "subject": subject,
             "status": "sent" if success else "failed",
-            "triggered_by": "manual",
         }).execute()
     except Exception as e:
         logger.warning(f"[send_manual_email] Could not write to email_log: {e}")
@@ -390,5 +539,24 @@ async def send_manual_email(
             sb.table("orders").update({"email_status": "sent"}).eq("id", order_id).execute()
         except Exception as e:
             logger.warning(f"[send_manual_email] Could not update email_status: {e}")
+
+        # Advance status to delivered on any successful manual send (Dev only /
+        # Print only / blank notification / negatives-ready flows that don't go
+        # through the Drive watcher). Guarded so it never regresses a terminal status.
+        if order.get("status") not in ("delivered", "cancelled", "discarded"):
+            try:
+                sb.table("orders").update({
+                    "status": "delivered",
+                    "delivered_at": datetime.utcnow().isoformat(),
+                }).eq("id", order_id).execute()
+                sb.table("order_events").insert({
+                    "order_id": order_id,
+                    "event_type": "delivered",
+                    "description": "Order delivered — manual email sent",
+                    "actor_label": "manual_email",
+                    "metadata": {"template_key": template_key},
+                }).execute()
+            except Exception as e:
+                logger.warning(f"[send_manual_email] Could not update status to delivered: {e}")
 
     return success
