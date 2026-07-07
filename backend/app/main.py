@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import get_settings
-from app.api import auth, orders, stores
+from app.api import auth, orders, stores, dashboard, refund_warnings
 from app.api.rolls import router as rolls_router
 from app.api.pronto import router as pronto_router
 from app.api.drive import router as drive_router
@@ -39,6 +39,10 @@ app.include_router(stores.router, prefix="/api")
 app.include_router(pronto_router, prefix="/api")
 app.include_router(drive_router, prefix="/api")
 app.include_router(emails_router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(refund_warnings.router, prefix="/api/refund-warnings", tags=["refund_warnings"])
+# Underscore alias — the Phase 3 spec references both spellings
+app.include_router(refund_warnings.router, prefix="/api/refund_warnings", include_in_schema=False)
 
 scheduler = AsyncIOScheduler()
 

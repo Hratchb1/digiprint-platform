@@ -3,18 +3,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
 from uuid import UUID
+from datetime import datetime
 import asyncio
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.schemas import (
     OrderCreate, OrderRead, OrderSummary, OrderStatusUpdate,
-    OrderMarkBlank, OrderSetDriveLink, RollsAddPayload
+    OrderMarkBlank, OrderSetDriveLink, RollsAddPayload, OrderDiscardRequest
 )
-from app.models.orm import Order, Roll, Store
+from app.models.orm import Order, Roll, Store, OrderActivity
 from app.services.order_service import order_service
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+# Default visibility: active pipeline states. Terminal states (cancelled,
+# discarded) are hidden unless explicitly requested.
+ACTIVE_STATUSES = ("inbound", "booked_in", "scanning", "delivered")
+TERMINAL_STATUSES = ("cancelled", "discarded")
+VALID_STATUSES = set(ACTIVE_STATUSES) | set(TERMINAL_STATUSES)
+
+DISCARDABLE_STATUSES = ("inbound", "booked_in", "scanning")
 
 
 def _actor(current_user: dict) -> str:
@@ -41,18 +50,40 @@ async def create_order(
 @router.get("", response_model=List[OrderRead])
 async def list_orders(
     store_id: Optional[UUID] = Query(None),
-    status: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, description="Comma-separated statuses, e.g. inbound,booked_in"),
+    include_terminal: bool = Query(False, description="Include cancelled and discarded orders"),
+    film_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """List orders. Store staff are limited to their own store."""
+    """List orders. Store staff are limited to their own store.
+
+    Defaults to active statuses (inbound, booked_in, scanning, delivered).
+    An explicit ?status= list overrides the default and include_terminal.
+    """
     if current_user.get("role") != "master_admin" and not store_id:
         store_id = UUID(current_user["store_id"]) if current_user.get("store_id") else None
 
-    orders = await order_service.list_orders(db, store_id, status, search, limit, offset)
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        invalid = [s for s in statuses if s not in VALID_STATUSES]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid status value(s): {', '.join(invalid)}. "
+                       f"Valid: {', '.join(sorted(VALID_STATUSES))}",
+            )
+    else:
+        statuses = list(ACTIVE_STATUSES)
+        if include_terminal:
+            statuses += list(TERMINAL_STATUSES)
+
+    orders = await order_service.list_orders(
+        db, store_id, statuses, search, limit, offset, film_type=film_type
+    )
     return [_enrich(o) for o in orders]
 
 
@@ -325,6 +356,52 @@ async def get_events(
     ]
 
 
+@router.post("/{order_id}/discard", response_model=OrderRead)
+async def discard_order(
+    order_id: UUID,
+    payload: OrderDiscardRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Discard an order that should never have entered the pipeline.
+
+    Only inbound, booked_in and scanning orders can be discarded.
+    Reason validation (422 on invalid) is handled by the DiscardReason enum.
+    """
+    order = await order_service.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.status not in DISCARDABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot discard an order in status '{order.status}' — "
+                   f"only {', '.join(DISCARDABLE_STATUSES)} orders can be discarded",
+        )
+
+    operator = payload.operator_id or _actor(current_user)
+    order.status = "discarded"
+    order.discarded_at = datetime.utcnow()
+    order.discarded_by = operator
+    order.discard_reason = payload.reason.value
+    order.discard_notes = payload.notes
+
+    db.add(OrderActivity(
+        order_id=order.id,
+        event_type="order_discarded",
+        event_data={"reason": payload.reason.value, "notes": payload.notes},
+        operator_id=operator,
+    ))
+
+    await db.commit()
+    order = await order_service.get_order(db, order.id)
+    return _enrich(order)
+
+
+def _iso(dt) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+
 def _enrich(order: Order) -> dict:
     """Serialize order to dict for frontend."""
     order_date = None
@@ -360,6 +437,20 @@ def _enrich(order: Order) -> dict:
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "date_scanned": order.date_scanned.isoformat() if order.date_scanned else None,
         "date_delivered": order.date_delivered.isoformat() if order.date_delivered else None,
+        # Inbound pipeline fields (migration 003)
+        "pronto_order_number": order.pronto_order_number,
+        "pronto_account_number": order.pronto_account_number,
+        "pronto_order_date": _iso(order.pronto_order_date),
+        "booked_in_at": _iso(order.booked_in_at),
+        "scanning_at": _iso(order.scanning_at),
+        "delivered_at": _iso(order.delivered_at),
+        "cancelled_at": _iso(order.cancelled_at),
+        "discarded_at": _iso(order.discarded_at),
+        "discarded_by": order.discarded_by,
+        "discard_reason": order.discard_reason,
+        "discard_notes": order.discard_notes,
+        "refund_status": order.refund_status,
+        "refund_amount": order.refund_amount,
         "notes": order.notes,
         "rolls": [
             {

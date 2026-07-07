@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, table, column
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
@@ -178,7 +178,16 @@ class OrderService:
             metadata={"source": source, "roll_count": roll_count},
         )
 
-    async def list_orders(self, db: AsyncSession, store_id: Optional[UUID] = None, status: Optional[str] = None, search: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Order]:
+    async def list_orders(
+        self,
+        db: AsyncSession,
+        store_id: Optional[UUID] = None,
+        statuses: Optional[List[str]] = None,
+        search: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        film_type: Optional[str] = None,
+    ) -> List[Order]:
         q = (
             select(Order)
             .options(selectinload(Order.rolls), selectinload(Order.store))
@@ -186,11 +195,20 @@ class OrderService:
         )
         if store_id:
             q = q.where(Order.store_id == store_id)
-        if status:
-            q = q.where(Order.status == status)
+        if statuses:
+            q = q.where(Order.status.in_(statuses))
+        if film_type:
+            # film_type lives on pronto_cache lines, not on orders —
+            # match orders whose Pronto sales order contains that film type
+            pronto_cache = table("pronto_cache", column("sales_order_number"), column("film_type"))
+            subq = select(pronto_cache.c.sales_order_number).where(
+                pronto_cache.c.film_type == film_type
+            )
+            q = q.where(Order.pronto_order_number.in_(subq))
         if search:
             q = q.where(or_(
                 Order.order_number.ilike(f"%{search}%"),
+                Order.pronto_order_number.ilike(f"%{search}%"),
                 Order.customer_name.ilike(f"%{search}%"),
                 Order.customer_email.ilike(f"%{search}%"),
             ))

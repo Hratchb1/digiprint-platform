@@ -99,6 +99,26 @@ class Order(Base):
 
     # --- Inbound pipeline status timestamps (migration 003) ---
     booked_in_at = Column(DateTime(timezone=True))
+    scanning_at = Column(DateTime(timezone=True))
+    delivered_at = Column(DateTime(timezone=True))
+    cancelled_at = Column(DateTime(timezone=True))
+
+    # --- Pronto identifiers (migration 003) ---
+    pronto_order_number = Column(Text)
+    pronto_account_number = Column(Text)
+    pronto_order_date = Column(DateTime(timezone=True))
+    pronto_shipped_date = Column(DateTime(timezone=True))
+
+    # --- Discard workflow (migration 003) ---
+    discarded_at = Column(DateTime(timezone=True))
+    discarded_by = Column(Text)
+    discard_reason = Column(Text)
+    discard_notes = Column(Text)
+
+    # --- Refund tracking (migration 003) ---
+    refund_status = Column(Text)
+    refund_pronto_order_number = Column(Text)
+    refund_amount = Column(Float)
 
     operator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     operator_initials = Column(Text)
@@ -150,6 +170,18 @@ class OrderEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     order = relationship("Order", back_populates="events")
+
+
+class OrderActivity(Base):
+    """Inbound-pipeline activity log (migration 003) — distinct from order_events."""
+    __tablename__ = "order_activity"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(Text, nullable=False)
+    event_data = Column(JSON, default=dict)
+    operator_id = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class RollAuditLog(Base):

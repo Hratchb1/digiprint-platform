@@ -33,6 +33,14 @@ class OrderType(str, Enum):
     passport    = "passport"
 
 
+class DiscardReason(str, Enum):
+    charge_correction = "charge_correction"
+    add_on_existing   = "add_on_existing"
+    not_film_related  = "not_film_related"
+    duplicate_sale    = "duplicate_sale"
+    other             = "other"
+
+
 class UserRole(str, Enum):
     staff        = "staff"
     store_admin  = "store_admin"
@@ -207,6 +215,20 @@ class OrderRead(BaseModel):
     created_at: datetime
     date_scanned: Optional[datetime]
     date_delivered: Optional[datetime]
+    # Inbound pipeline fields (migration 003)
+    pronto_order_number: Optional[str] = None
+    pronto_account_number: Optional[str] = None
+    pronto_order_date: Optional[datetime] = None
+    booked_in_at: Optional[datetime] = None
+    scanning_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    discarded_at: Optional[datetime] = None
+    discarded_by: Optional[str] = None
+    discard_reason: Optional[str] = None
+    discard_notes: Optional[str] = None
+    refund_status: Optional[str] = None
+    refund_amount: Optional[float] = None
     rolls: List[RollRead] = []
     notes: Optional[str]
 
@@ -249,6 +271,25 @@ class OrderMarkBlank(BaseModel):
 
 class OrderSetDriveLink(BaseModel):
     drive_order_folder_url: str
+
+
+class OrderDiscardRequest(BaseModel):
+    reason: DiscardReason
+    notes: Optional[str] = None
+    operator_id: Optional[str] = None
+
+
+# ── Refund warnings ────────────────────────────────────────────────────────
+
+class RefundWarningResolveRequest(BaseModel):
+    order_id: UUID
+    notes: Optional[str] = None
+    operator_id: Optional[str] = None
+
+
+class RefundWarningIgnoreRequest(BaseModel):
+    notes: Optional[str] = None
+    operator_id: Optional[str] = None
 
 
 # ── Dashboard / stats ──────────────────────────────────────────────────────
