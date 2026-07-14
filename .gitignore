@@ -1,19 +1,39 @@
-# Node modules
-node_modules/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
+# ── Secrets — never commit ─────────────────────────────────
 .env
+.env.*
+!.env.example
+*.env
+service_account.json
+**/service_account.json
+secrets.json
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
 venv/
 env/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# OS files
+# ── Node / frontend ─────────────────────────────────────────
+node_modules/
+frontend/dist/
+dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# ── OS / editor ─────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+Desktop.ini
+.idea/
+*.swp
 
-# Secrets
-*.env
-.env.local
-secrets.json
+# ── Logs / misc ─────────────────────────────────────────────
+*.log
+*.bak
