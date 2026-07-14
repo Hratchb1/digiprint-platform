@@ -16,7 +16,7 @@ import asyncio
 import csv
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 import httpx
@@ -25,6 +25,12 @@ from supabase import create_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    """Naive UTC now — datetime.utcnow() is deprecated (3.12), but the DB
+    stores naive-UTC timestamps, so strip tzinfo to keep values identical."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # ── Google Sheet config ──────────────────────────────────────
 SHEET_ID = "1t2zijvvjqSlzVPOjkTSTDmGgpxrH2vaT8x4xbVJXfsg"
@@ -270,7 +276,7 @@ def _apply_refund(matched_order: dict, refund_lines: list[dict], client) -> None
     order_status       = matched_order["status"]
     orig_order_number  = matched_order["pronto_order_number"]
     refund_order_number = refund_lines[0].get("sales_order_number", "")
-    now                = datetime.utcnow().isoformat()
+    now                = _utcnow().isoformat()
 
     refund_amount = abs(sum(
         _parse_decimal(r.get("shipped_value") or "0") or 0.0
@@ -478,8 +484,8 @@ def _sync_pronto_cache_blocking(rows: list[dict]) -> dict:
             "service_type":       sku_data.get("service_type"),
             "film_type":          sku_data.get("film_type"),
             "scan_resolution":    sku_data.get("scan_resolution"),
-            "last_seen_at":       datetime.utcnow().isoformat(),
-            "synced_at":          datetime.utcnow().isoformat(),
+            "last_seen_at":       _utcnow().isoformat(),
+            "synced_at":          _utcnow().isoformat(),
         }
         cache_records.append(record)
 
@@ -521,7 +527,7 @@ def _sync_pronto_cache_blocking(rows: list[dict]) -> dict:
             if existing.data:
                 continue
 
-            now = datetime.utcnow().isoformat()
+            now = _utcnow().isoformat()
             customer_name = header.get("customer_name") or "Unknown"
 
             insert_result = client.table("orders").insert({
@@ -635,7 +641,7 @@ def _sync_pronto_cache_blocking(rows: list[dict]) -> dict:
         "inbound_orders_created":   inbound_created,
         "refund_warnings_created":  refund_warnings_created,
         "orders_addon_updated":     orders_updated,
-        "synced_at":                datetime.utcnow().isoformat(),
+        "synced_at":                _utcnow().isoformat(),
     }
     logger.info(
         f"[pronto_sync] Complete — {inbound_created} inbound created, "

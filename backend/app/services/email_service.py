@@ -21,12 +21,14 @@ jinja_env = Environment(
 # ---------------------------------------------------------------------------
 # Template routing
 # ---------------------------------------------------------------------------
+# v4 templates live (Phase 5, 15 Jul 2026). Instant rollback: point any
+# entry back at the original filename — the pre-v4 files are kept in place.
 TEMPLATE_MAP = {
-    "scans_ready":           "scans_ready.html",
-    "prints_and_scans_ready": "prints_and_scans_ready.html",
-    "prints_ready":          "prints_ready.html",
-    "negatives_ready":       "negatives_ready.html",
-    "blank_notification":    "blank_notification.html",
+    "scans_ready":            "scans_ready_v4.html",
+    "prints_and_scans_ready": "prints_and_scans_ready_v4.html",
+    "prints_ready":           "prints_ready_v4.html",
+    "negatives_ready":        "negatives_ready_v4.html",
+    "blank_notification":     "blank_notification_v4.html",
 }
 
 SUBJECT_MAP = {
