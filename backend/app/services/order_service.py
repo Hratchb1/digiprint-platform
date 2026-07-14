@@ -65,6 +65,9 @@ class OrderService:
 
         order = Order(
             order_number=payload.order_number,
+            # Stamp the Pronto link so pronto_sync's dedup recognises this
+            # sale and doesn't create a duplicate inbound row for it.
+            pronto_order_number=payload.order_number,
             store_id=payload.store_id,
             customer_name=payload.customer_name,
             customer_email=payload.customer_email,
@@ -73,6 +76,8 @@ class OrderService:
             order_type=payload.order_type.value,
             operator_initials=payload.operator_initials,
             notes=payload.notes,
+            status="booked_in",
+            booked_in_at=datetime.utcnow(),
             # Set addon flags directly on the ORM object
             border_scan=addon_flags.get("border_scan", False),
             contact_sheet=addon_flags.get("contact_sheet", False),
@@ -187,6 +192,7 @@ class OrderService:
         limit: int = 100,
         offset: int = 0,
         film_type: Optional[str] = None,
+        twin: Optional[str] = None,
     ) -> List[Order]:
         q = (
             select(Order)
@@ -197,6 +203,8 @@ class OrderService:
             q = q.where(Order.store_id == store_id)
         if statuses:
             q = q.where(Order.status.in_(statuses))
+        if twin:
+            q = q.where(Order.rolls.any(Roll.twin_check == twin.strip().zfill(4)))
         if film_type:
             # film_type lives on pronto_cache lines, not on orders —
             # match orders whose Pronto sales order contains that film type

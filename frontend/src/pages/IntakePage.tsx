@@ -3,6 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useProntoLookup } from "../hooks/useProntoLookup";
 import { ProntoOrderSummary } from "../components/ProntoOrderSummary";
 import { api } from "../lib/api";
+import { statusLabel } from "../lib/status";
 
 const TERRITORY_STORE_MAP: Record<string, string> = {
   BOND: "a90c273e-49ff-4733-b709-31066f2ec503",
@@ -70,6 +71,10 @@ interface LastBooked {
   manual?: boolean;
 }
 
+interface SessionEntry extends LastBooked {
+  time: Date;
+}
+
 interface ManualOrderData {
   customer_name: string;
   customer_email: string;
@@ -79,7 +84,7 @@ interface ManualOrderData {
   store_id: string;
 }
 
-type IntakeStep = "operator" | "lookup" | "manual" | "confirm" | "twins" | "done";
+type IntakeStep = "operator" | "lookup" | "manual" | "confirm" | "twins";
 type DupAction = "add" | "new" | null;
 
 // ── Validation ───────────────────────────────────────────────
@@ -150,7 +155,9 @@ export default function IntakePage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const [lastBooked, setLastBooked] = useState<LastBooked | null>(null);
+  // Running log of this session's bookings — newest first; the newest entry
+  // doubles as the booking confirmation (PRD 6.6 session log panel).
+  const [sessionLog, setSessionLog] = useState<SessionEntry[]>([]);
 
   const [existingOrder, setExistingOrder] = useState<ExistingOrderInfo | null>(null);
   const [dupAction, setDupAction] = useState<DupAction>(null);
@@ -199,13 +206,17 @@ export default function IntakePage() {
         api.get("/orders/check/order-number", {
           params: { order_number: order.sales_order_number, store_id: storeId }
         }).then(({ data }) => {
-          if (data.exists) {
+          // An inbound order with no rolls is the Pronto-synced twin of this
+          // sale, not a duplicate booking — go straight to intake. The backend
+          // promotes it to booked_in when the rolls are saved.
+          const emptyInbound = data.exists
+            && data.order?.status === "inbound"
+            && (data.order?.rolls?.length ?? 0) === 0;
+          if (data.exists && !emptyInbound) {
             setExistingOrder(data.order);
             setShowDupModal(true);
-            setStep("confirm");
-          } else {
-            setStep("confirm");
           }
+          setStep("confirm");
         }).catch(() => setStep("confirm"));
       } else {
         setStep("confirm");
@@ -238,7 +249,10 @@ export default function IntakePage() {
         const { data } = await api.get("/orders/check/order-number", {
           params: { order_number: orderInput.trim(), store_id: storeId }
         });
-        if (data.exists) {
+        const emptyInbound = data.exists
+          && data.order?.status === "inbound"
+          && (data.order?.rolls?.length ?? 0) === 0;
+        if (data.exists && !emptyInbound) {
           setExistingOrder(data.order);
           setShowDupModal(true);
         }
@@ -279,6 +293,38 @@ export default function IntakePage() {
   };
 
   const handleClear = () => {
+    clear();
+    setOrderInput("");
+    setTwins([]);
+    setSingleInput("");
+    setSingleError(null);
+    setFirstTwin("");
+    setLastTwin("");
+    setRangeError(null);
+    setSaveError(null);
+    setServiceType("Develop + Scan");
+    setExistingOrder(null);
+    setDupAction(null);
+    setShowDupModal(false);
+    setIsManualEntry(false);
+    setManualData({
+      customer_name: "",
+      customer_email: "",
+      customer_phone: "",
+      account: "",
+      service_type: "Develop + Scan",
+      store_id: userInfo.store_id || "",
+    });
+    setManualErrors({});
+    setStep("lookup");
+  };
+
+  const logBooking = (entry: LastBooked) =>
+    setSessionLog(prev => [{ ...entry, time: new Date() }, ...prev]);
+
+  // Rapid-entry reset: straight back to a fresh, focused order-number input
+  // (the step change re-triggers the focus effect) — barcode-scanner cadence.
+  const resetForNext = () => {
     clear();
     setOrderInput("");
     setTwins([]);
@@ -377,7 +423,7 @@ export default function IntakePage() {
             rolls: rollsPayload,
             operator_initials: operatorInitials || null,
           });
-          setLastBooked({
+          logBooking({
             orderNum: orderInput.trim(),
             customerName: manualData.customer_name,
             rollCount: validTwins.length,
@@ -400,7 +446,7 @@ export default function IntakePage() {
             manual_entry:      true,
             rolls:             rollsPayload,
           });
-          setLastBooked({
+          logBooking({
             orderNum: orderNumber,
             customerName: manualData.customer_name,
             rollCount: validTwins.length,
@@ -424,7 +470,7 @@ export default function IntakePage() {
             rolls: rollsPayload,
             operator_initials: operatorInitials || null,
           });
-          setLastBooked({
+          logBooking({
             orderNum: order.sales_order_number,
             customerName: order.customer_name,
             rollCount: validTwins.length,
@@ -445,7 +491,7 @@ export default function IntakePage() {
             manual_entry:      false,
             rolls:             rollsPayload,
           });
-          setLastBooked({
+          logBooking({
             orderNum: orderNumber,
             customerName: order.customer_name,
             rollCount: validTwins.length,
@@ -453,7 +499,7 @@ export default function IntakePage() {
           });
         }
       }
-      setStep("done");
+      resetForNext();
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       setSaveError(typeof detail === "string" ? detail : JSON.stringify(detail) || "Failed to save order.");
@@ -476,7 +522,7 @@ export default function IntakePage() {
   // ── Operator prompt ───────────────────────────────────────
   if (step === "operator") {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="h-full flex items-center justify-center px-4">
         <div className="w-full max-w-sm space-y-6">
           <div>
             <h1 className="text-2xl font-bold text-white">Film Intake</h1>
@@ -492,12 +538,12 @@ export default function IntakePage() {
               onKeyDown={(e) => e.key === "Enter" && handleOperatorSubmit()}
               placeholder="e.g. HB"
               maxLength={5}
-              className="w-full rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono tracking-widest uppercase"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono tracking-widest uppercase"
+              style={{ backgroundColor: "#111111" }}
             />
             {operatorError && <p className="text-sm text-red-400">{operatorError}</p>}
           </div>
-          <button onClick={handleOperatorSubmit} className="w-full py-3 rounded-lg font-semibold text-white" style={{ backgroundColor: "#f97316" }}>
+          <button onClick={handleOperatorSubmit} className="w-full py-3 rounded-lg font-semibold text-white" style={{ backgroundColor: "#ff6600" }}>
             Start intake
           </button>
         </div>
@@ -505,86 +551,11 @@ export default function IntakePage() {
     );
   }
 
-  // ── Done ──────────────────────────────────────────────────
-  if (step === "done") {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-md text-center space-y-6">
-          <div className="w-16 h-16 rounded-full bg-green-500 flex items-center justify-center mx-auto">
-            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-white">
-              {lastBooked?.action === "added" ? "Rolls added" : "Order booked"}
-            </h2>
-            {lastBooked?.manual && (
-              <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-medium text-orange-300 border border-orange-500/30" style={{ backgroundColor: "#431a00" }}>
-                Manual entry
-              </span>
-            )}
-            <p className="text-gray-400 mt-2">
-              {lastBooked?.customerName} — {lastBooked?.rollCount} roll{lastBooked?.rollCount !== 1 ? "s" : ""} checked in
-            </p>
-            <p className="text-gray-500 text-sm mt-1">#{lastBooked?.orderNum}</p>
-            <p className="text-gray-600 text-xs mt-1">Operator: {operatorInitials}</p>
-          </div>
-          <button
-            onClick={() => {
-              clear();
-              setOrderInput("");
-              setTwins([]);
-              setSingleInput("");
-              setFirstTwin("");
-              setLastTwin("");
-              setSingleError(null);
-              setRangeError(null);
-              setSaveError(null);
-              setServiceType("Develop + Scan");
-              setExistingOrder(null);
-              setDupAction(null);
-              setIsManualEntry(false);
-              setManualData({
-                customer_name: "",
-                customer_email: "",
-                customer_phone: "",
-                account: "",
-                service_type: "Develop + Scan",
-                store_id: userInfo.store_id || "",
-              });
-              setStep("lookup");
-            }}
-            className="w-full py-3 px-6 rounded-lg font-semibold text-white"
-            style={{ backgroundColor: "#f97316" }}
-          >
-            Next order
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Main intake ───────────────────────────────────────────
+  // ── Main intake — flow left, session log right, one viewport ──
   return (
-    <div className="max-w-lg mx-auto px-4 py-8 space-y-6">
-
-      {/* Last booked banner */}
-      {lastBooked && (
-        <div className="rounded-lg px-4 py-3 flex items-center justify-between" style={{ backgroundColor: "#064e3b" }}>
-          <div>
-            <p className="text-xs text-green-400 uppercase tracking-wide">Last booked</p>
-            <p className="text-sm text-white font-medium">
-              #{lastBooked.orderNum} — {lastBooked.customerName}
-              {lastBooked.manual && <span className="ml-2 text-xs text-orange-400">(manual)</span>}
-            </p>
-            <p className="text-xs text-green-400">
-              {lastBooked.rollCount} roll{lastBooked.rollCount !== 1 ? "s" : ""} · {lastBooked.action === "added" ? "Added to existing" : "New order"}
-            </p>
-          </div>
-          <button onClick={() => setLastBooked(null)} className="text-green-600 hover:text-green-400 text-lg">×</button>
-        </div>
-      )}
+    <div className="h-full flex overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-lg mx-auto px-4 py-5 space-y-4">
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Film Intake</h1>
@@ -610,19 +581,19 @@ export default function IntakePage() {
                 {existingOrder.operator ? ` by ${existingOrder.operator}` : ""}
               </p>
               <p className="text-sm text-gray-400 mt-0.5">
-                {existingOrder.rolls?.length || 0} roll{existingOrder.rolls?.length !== 1 ? "s" : ""} — Status: {existingOrder.status}
+                {existingOrder.rolls?.length || 0} roll{existingOrder.rolls?.length !== 1 ? "s" : ""} — Status: {statusLabel(existingOrder.status)}
               </p>
             </div>
           </div>
           <p className="text-sm text-gray-300 font-medium">What do you want to do?</p>
           <div className="space-y-2">
-            <button onClick={() => handleDupChoice("add")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#374151" }}>
+            <button onClick={() => handleDupChoice("add")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#2a2a2a" }}>
               ➕ Add more rolls — attach new twins to this order
             </button>
-            <button onClick={() => handleDupChoice("new")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#374151" }}>
+            <button onClick={() => handleDupChoice("new")} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white text-left" style={{ backgroundColor: "#2a2a2a" }}>
               📋 New booking — create separate booking as {orderInput.trim()}-B
             </button>
-            <button onClick={() => handleDupChoice("cancel")} className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-400 text-left border border-gray-700" style={{ backgroundColor: "#111827" }}>
+            <button onClick={() => handleDupChoice("cancel")} className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-400 text-left border border-[#222222]" style={{ backgroundColor: "#0f0f0f" }}>
               ✕ Cancel — go back
             </button>
           </div>
@@ -642,21 +613,21 @@ export default function IntakePage() {
               onKeyDown={(e) => e.key === "Enter" && handleInitialLookup()}
               placeholder="Scan or type order number"
               disabled={step !== "lookup"}
-              className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
-              style={{ backgroundColor: "#1f2937" }}
+              className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] disabled:opacity-50"
+              style={{ backgroundColor: "#111111" }}
             />
             {step === "lookup" && (
               <button
                 onClick={handleInitialLookup}
                 disabled={lookupLoading || !orderInput.trim()}
                 className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
-                style={{ backgroundColor: "#f97316" }}
+                style={{ backgroundColor: "#ff6600" }}
               >
                 {lookupLoading ? "Looking up..." : "Look up"}
               </button>
             )}
             {step !== "lookup" && (
-              <button onClick={handleClear} className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-gray-600" style={{ backgroundColor: "#1f2937" }}>
+              <button onClick={handleClear} className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-[#2a2a2a]" style={{ backgroundColor: "#111111" }}>
                 Change
               </button>
             )}
@@ -664,7 +635,7 @@ export default function IntakePage() {
 
           {/* Not found — offer manual entry */}
           {lookupError && step === "lookup" && (
-            <div className="rounded-lg border border-gray-700 p-4 space-y-3" style={{ backgroundColor: "#111827" }}>
+            <div className="rounded-lg border border-[#222222] p-4 space-y-3" style={{ backgroundColor: "#0f0f0f" }}>
               <p className="text-sm text-red-400">{lookupError}</p>
               <p className="text-xs text-gray-500">
                 Order not found in Pronto. If the system is unavailable, you can enter the order manually.
@@ -684,7 +655,7 @@ export default function IntakePage() {
 
       {/* Manual entry form */}
       {step === "manual" && !showDupModal && (
-        <div className="rounded-xl border border-orange-500/20 p-5 space-y-4" style={{ backgroundColor: "#1a1200" }}>
+        <div className="rounded-xl border border-orange-500/20 p-4 space-y-3" style={{ backgroundColor: "#1a1200" }}>
           <div className="flex items-center gap-2">
             <span className="text-orange-400 text-sm">✏️</span>
             <p className="text-orange-400 text-sm font-semibold">Manual entry — order {orderInput.trim()}</p>
@@ -700,8 +671,8 @@ export default function IntakePage() {
               <select
                 value={manualData.store_id}
                 onChange={(e) => setManualData(prev => ({ ...prev, store_id: e.target.value }))}
-                className="w-full rounded-lg px-3 py-2 text-sm text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                style={{ backgroundColor: "#1f2937" }}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+                style={{ backgroundColor: "#111111" }}
               >
                 <option value="">Select a store…</option>
                 {STORE_OPTIONS.map(s => (
@@ -722,8 +693,8 @@ export default function IntakePage() {
               onChange={(e) => setManualData(prev => ({ ...prev, customer_name: e.target.value }))}
               onKeyDown={(e) => e.key === "Enter" && handleManualConfirm()}
               placeholder="e.g. John Smith"
-              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+              style={{ backgroundColor: "#111111" }}
             />
             {manualErrors.customer_name && <p className="text-xs text-red-400">{manualErrors.customer_name}</p>}
           </div>
@@ -736,8 +707,8 @@ export default function IntakePage() {
               value={manualData.customer_email}
               onChange={(e) => setManualData(prev => ({ ...prev, customer_email: e.target.value }))}
               placeholder="e.g. john@email.com"
-              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+              style={{ backgroundColor: "#111111" }}
             />
           </div>
 
@@ -749,8 +720,8 @@ export default function IntakePage() {
               value={manualData.customer_phone}
               onChange={(e) => setManualData(prev => ({ ...prev, customer_phone: e.target.value }))}
               placeholder="e.g. 0412 345 678"
-              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+              style={{ backgroundColor: "#111111" }}
             />
           </div>
 
@@ -762,8 +733,8 @@ export default function IntakePage() {
               value={manualData.account}
               onChange={(e) => setManualData(prev => ({ ...prev, account: e.target.value }))}
               placeholder="e.g. 1429084"
-              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+              style={{ backgroundColor: "#111111" }}
             />
           </div>
 
@@ -773,8 +744,8 @@ export default function IntakePage() {
             <select
               value={manualData.service_type}
               onChange={(e) => setManualData(prev => ({ ...prev, service_type: e.target.value }))}
-              className="w-full rounded-lg px-3 py-2 text-sm text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-              style={{ backgroundColor: "#1f2937" }}
+              className="w-full rounded-lg px-3 py-2 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+              style={{ backgroundColor: "#111111" }}
             >
               {Object.keys(SERVICE_TYPE_MAP).map(s => (
                 <option key={s} value={s}>{s}</option>
@@ -786,14 +757,14 @@ export default function IntakePage() {
             <button
               onClick={handleManualConfirm}
               className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white"
-              style={{ backgroundColor: "#f97316" }}
+              style={{ backgroundColor: "#ff6600" }}
             >
               Confirm & enter twins
             </button>
             <button
               onClick={handleClear}
-              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 border border-gray-700"
-              style={{ backgroundColor: "#111827" }}
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 border border-[#222222]"
+              style={{ backgroundColor: "#0f0f0f" }}
             >
               Cancel
             </button>
@@ -834,18 +805,18 @@ export default function IntakePage() {
       {/* Twin entry */}
       {step === "twins" && !showDupModal && (
         <div className="space-y-4">
-          <div className="flex rounded-lg overflow-hidden border border-gray-600">
+          <div className="flex rounded-lg overflow-hidden border border-[#2a2a2a]">
             <button
               onClick={() => { setTwinMode("single"); setSingleError(null); }}
               className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "single" ? "text-white" : "text-gray-400"}`}
-              style={{ backgroundColor: twinMode === "single" ? "#374151" : "#1f2937" }}
+              style={{ backgroundColor: twinMode === "single" ? "#2a2a2a" : "#111111" }}
             >
               Twin checks
             </button>
             <button
               onClick={() => { setTwinMode("range"); setRangeError(null); }}
               className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "range" ? "text-white" : "text-gray-400"}`}
-              style={{ backgroundColor: twinMode === "range" ? "#374151" : "#1f2937" }}
+              style={{ backgroundColor: twinMode === "range" ? "#2a2a2a" : "#111111" }}
             >
               Range
             </button>
@@ -866,10 +837,10 @@ export default function IntakePage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSingleSubmit()}
                   placeholder="e.g. 0042 or 0042-0051"
                   maxLength={9}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
-                  style={{ backgroundColor: "#1f2937" }}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                  style={{ backgroundColor: "#111111" }}
                 />
-                <button onClick={handleSingleSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40" style={{ backgroundColor: "#374151" }}>Add</button>
+                <button onClick={handleSingleSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40" style={{ backgroundColor: "#2a2a2a" }}>Add</button>
               </div>
               {singleError && <p className="text-sm text-red-400">{singleError}</p>}
               {twins.length > 0 && !singleInput && (
@@ -893,8 +864,8 @@ export default function IntakePage() {
                   onKeyDown={(e) => e.key === "Enter" && lastTwinRef.current?.focus()}
                   placeholder="First (e.g. 0042)"
                   maxLength={4}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
-                  style={{ backgroundColor: "#1f2937" }}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                  style={{ backgroundColor: "#111111" }}
                 />
                 <span className="text-gray-500 text-sm px-1">→</span>
                 <input
@@ -905,10 +876,10 @@ export default function IntakePage() {
                   onKeyDown={(e) => e.key === "Enter" && handleRangeSubmit()}
                   placeholder="Last (e.g. 0051)"
                   maxLength={4}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
-                  style={{ backgroundColor: "#1f2937" }}
+                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                  style={{ backgroundColor: "#111111" }}
                 />
-                <button onClick={handleRangeSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40 whitespace-nowrap" style={{ backgroundColor: "#374151" }}>Add range</button>
+                <button onClick={handleRangeSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40 whitespace-nowrap" style={{ backgroundColor: "#2a2a2a" }}>Add range</button>
               </div>
               {rangeError && <p className="text-sm text-red-400">{rangeError}</p>}
               {rangePreviewCount && !rangeError && (
@@ -923,7 +894,7 @@ export default function IntakePage() {
                 <p className="text-xs text-gray-500 uppercase tracking-wide">{validTwinCount} valid</p>
                 {dupTwinCount > 0 && <p className="text-xs text-red-400 uppercase tracking-wide">{dupTwinCount} duplicate{dupTwinCount !== 1 ? "s" : ""}</p>}
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
                 {twins.map((entry) => (
                   <div
                     key={entry.twin}
@@ -945,7 +916,7 @@ export default function IntakePage() {
                 onClick={handleSave}
                 disabled={saving || validTwinCount === 0}
                 className="w-full py-3 rounded-lg font-semibold text-white disabled:opacity-40"
-                style={{ backgroundColor: "#f97316" }}
+                style={{ backgroundColor: "#ff6600" }}
               >
                 {saving ? "Saving..." : `${dupAction === "add" ? "Add" : "Book"} ${validTwinCount} roll${validTwinCount !== 1 ? "s" : ""}`}
               </button>
@@ -953,6 +924,55 @@ export default function IntakePage() {
           )}
         </div>
       )}
+        </div>
+      </div>
+
+      {/* Session log panel — this session's bookings, newest first */}
+      <aside className="hidden md:flex w-80 flex-shrink-0 flex-col border-l border-[#1e1e1e]" style={{ backgroundColor: "#0f0f0f" }}>
+        <div className="px-4 py-4 border-b border-[#1e1e1e] flex items-center justify-between">
+          <p className="text-white text-sm font-semibold">Session Log</p>
+          <span className="text-gray-500 text-xs">
+            {sessionLog.length} booking{sessionLog.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {sessionLog.length === 0 ? (
+            <p className="text-gray-600 text-xs px-1 pt-2">
+              Orders you book this session will appear here.
+            </p>
+          ) : (
+            sessionLog.map((entry, i) => (
+              <div
+                key={`${entry.orderNum}-${entry.time.getTime()}`}
+                className={`rounded-lg border p-3 ${
+                  i === 0
+                    ? "border-green-500/40 bg-green-500/5"
+                    : "border-[#222222]"
+                }`}
+                style={i === 0 ? undefined : { backgroundColor: "#111111" }}
+              >
+                {i === 0 && (
+                  <p className="text-green-400 text-[10px] uppercase tracking-widest font-semibold mb-1">
+                    {entry.action === "added" ? "Rolls added" : "Booked"} ✓
+                  </p>
+                )}
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-white text-sm font-mono font-medium truncate">#{entry.orderNum}</p>
+                  <p className="text-gray-600 text-[11px] flex-shrink-0">
+                    {entry.time.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+                <p className="text-gray-400 text-xs truncate">{entry.customerName}</p>
+                <p className="text-gray-600 text-[11px] mt-0.5">
+                  {entry.rollCount} roll{entry.rollCount !== 1 ? "s" : ""}
+                  {" · "}{entry.action === "added" ? "added to existing" : "new booking"}
+                  {entry.manual && <span className="text-orange-400"> · manual</span>}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

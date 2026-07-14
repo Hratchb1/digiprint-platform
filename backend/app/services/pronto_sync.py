@@ -511,9 +511,12 @@ def _sync_pronto_cache_blocking(rows: list[dict]) -> dict:
                 )
                 continue
 
-            # No-op if order already in RollCall
-            existing = client.table("orders").select("id").eq(
-                "pronto_order_number", order_num
+            # No-op if order already in RollCall. Match on order_number too:
+            # intake-created orders may predate this sale appearing in the
+            # sheet, and older rows have no pronto_order_number at all —
+            # matching only pronto_order_number created duplicate inbound rows.
+            existing = client.table("orders").select("id").or_(
+                f"pronto_order_number.eq.{order_num},order_number.eq.{order_num}"
             ).execute()
             if existing.data:
                 continue

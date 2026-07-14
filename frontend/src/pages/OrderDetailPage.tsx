@@ -1,34 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ordersApi } from '../lib/api'
+import { ordersApi, rollsApi, emailsApi, driveApi, DiscardReason } from '../lib/api'
 import { useState } from 'react'
-import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail, Pencil, Phone } from 'lucide-react'
+import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail, Pencil, Phone, Trash2 } from 'lucide-react'
 import { format } from 'date-fns'
 import clsx from 'clsx'
-
-const STATUS_STYLES: Record<string, string> = {
-  booked:      'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
-  processing:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  scanned:     'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  delivered:   'bg-green-500/10 text-green-400 border-green-500/20',
-  blank:       'bg-red-500/10 text-red-400 border-red-500/20',
-  print_ready: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  archived:    'bg-green-500/10 text-green-400 border-green-500/20',
-}
-
-const NEXT_STATUSES: Record<string, string[]> = {
-  booked:      ['processing', 'scanned', 'delivered', 'cancelled'],
-  processing:  ['scanned', 'delivered', 'cancelled'],
-  scanned:     ['delivered', 'print_ready', 'cancelled'],
-  print_ready: ['delivered'],
-}
+import {
+  NEXT_STATUSES, ACTIVE_STATUSES, OrderStatus, statusLabel, statusStyle,
+  displayRollStatus, rollStatusStyle,
+} from '../lib/status'
+import DiscardModal, { DISCARD_REASON_LABELS } from '../components/DiscardModal'
+import RefundBanner from '../components/RefundBanner'
 
 // Twin editing allowed on all statuses — collision check enforced on the backend
-
-function displayRollStatus(status: string): string {
-  if (status === 'archived') return 'delivered'
-  return status
-}
 
 function getNotifyButtonLabel(order: any): string | null {
   if (order.status === 'delivered') return null
@@ -53,6 +37,7 @@ export default function OrderDetailPage() {
   const [editingTwin, setEditingTwin] = useState<string | null>(null)
   const [twinValue, setTwinValue] = useState('')
   const [twinError, setTwinError] = useState('')
+  const [showDiscardModal, setShowDiscardModal] = useState(false)
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['order', id],
@@ -70,7 +55,7 @@ export default function OrderDetailPage() {
 
   const { data: rescanData } = useQuery({
     queryKey: ['order-rescans', id],
-    queryFn: () => fetch(`/api/drive/log/order/${id}`).then(r => r.json()),
+    queryFn: () => driveApi.logForOrder(id!),
     enabled: !!id,
   })
   const rescans = rescanData?.rescans || []
@@ -103,30 +88,29 @@ export default function OrderDetailPage() {
   })
 
   const retryBorderMutation = useMutation({
-    mutationFn: () => fetch(`/api/orders/${id}/retry-border`, { method: 'POST' }).then(r => {
-      if (!r.ok) throw new Error('Retry failed')
-      return r.json()
-    }),
+    mutationFn: () => ordersApi.retryBorder(id!),
     onSuccess: invalidate,
   })
 
   const resetTwinsMutation = useMutation({
-    mutationFn: () => fetch(`/api/orders/${id}/reset-twins`, { method: 'POST' }).then(r => {
-      if (!r.ok) throw new Error('Reset failed')
-      return r.json()
-    }),
+    mutationFn: () => ordersApi.resetTwins(id!),
     onSuccess: invalidate,
   })
 
+  const discardMutation = useMutation({
+    mutationFn: ({ reason, notes }: { reason: DiscardReason; notes?: string }) =>
+      ordersApi.discard(id!, reason, notes),
+    onSuccess: () => {
+      setShowDiscardModal(false)
+      showToast('success', 'Order discarded — twin checks released')
+      invalidate()
+    },
+    onError: (err: any) =>
+      showToast('error', err?.response?.data?.detail || 'Failed to discard order'),
+  })
+
   const sendEmailMutation = useMutation({
-    mutationFn: () => fetch(`/api/emails/send/${id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }).then(r => {
-      if (!r.ok) throw new Error('Email failed to send')
-      return r.json()
-    }),
+    mutationFn: () => emailsApi.send(id!),
     onSuccess: async () => {
       try {
         await ordersApi.updateStatus(id!, 'delivered')
@@ -138,36 +122,20 @@ export default function OrderDetailPage() {
   })
 
   const resendEmailMutation = useMutation({
-    mutationFn: () => fetch(`/api/emails/resend/${id}`, { method: 'POST' }).then(r => {
-      if (!r.ok) throw new Error('Resend failed')
-      return r.json()
-    }),
+    mutationFn: () => emailsApi.resend(id!),
     onSuccess: () => { showToast('success', 'Email resent successfully'); invalidate() },
     onError: () => showToast('error', 'Failed to resend email — check the activity log'),
   })
 
   const approveRescanMutation = useMutation({
-    mutationFn: (folderId: string) => fetch(`/api/drive/log/${folderId}`, { method: 'DELETE' }).then(r => {
-      if (!r.ok) throw new Error('Approval failed')
-      return r.json()
-    }),
+    mutationFn: (folderId: string) => driveApi.clearLogEntry(folderId),
     onSuccess: () => { showToast('success', 'Rescan approved — watcher will reprocess on next cycle'); invalidate() },
     onError: () => showToast('error', 'Failed to approve rescan'),
   })
 
   const twinMutation = useMutation({
     mutationFn: ({ rollId, twin }: { rollId: string; twin: string }) =>
-      fetch(`/api/rolls/${rollId}/twin-check`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify({ twin_check: twin }),
-      }).then(r => {
-        if (!r.ok) return r.json().then(e => Promise.reject(e))
-        return r.json()
-      }),
+      rollsApi.updateTwinCheck(rollId, twin),
     onSuccess: () => {
       setEditingTwin(null)
       setTwinValue('')
@@ -176,14 +144,14 @@ export default function OrderDetailPage() {
       invalidate()
     },
     onError: (err: any) => {
-      showToast('error', err?.detail || 'Failed to update twin check')
+      showToast('error', err?.response?.data?.detail || 'Failed to update twin check')
     },
   })
 
   if (isLoading) return <div className="p-8 text-[#444] text-sm">Loading…</div>
   if (!order) return <div className="p-8 text-[#ff4444] text-sm">Order not found</div>
 
-  const nextStatuses = NEXT_STATUSES[order.status] || []
+  const nextStatuses = NEXT_STATUSES[order.status as OrderStatus] || []
   const turnaround = order.date_delivered && order.created_at
     ? ((new Date(order.date_delivered).getTime() - new Date(order.created_at).getTime()) / 3600000).toFixed(1)
     : null
@@ -195,6 +163,8 @@ export default function OrderDetailPage() {
   const notifyButtonLabel = getNotifyButtonLabel(order)
   const isDelivered = order.status === 'delivered'
   const emailFailed = order.email_status === 'failed'
+  const isDiscarded = order.status === 'discarded'
+  const canDiscard = ACTIVE_STATUSES.includes(order.status)
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
@@ -223,6 +193,35 @@ export default function OrderDetailPage() {
 
         {/* Main column */}
         <div className="lg:col-span-2 space-y-5">
+
+          {/* Refund warning (set by Pronto sync) */}
+          {order.refund_status && (
+            <RefundBanner refundStatus={order.refund_status} refundAmount={order.refund_amount} />
+          )}
+
+          {/* Discarded banner */}
+          {isDiscarded && (
+            <div className="bg-red-500/5 border border-red-500/25 rounded-xl p-4 flex items-start gap-3">
+              <Trash2 size={15} className="text-red-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-red-400 text-sm font-medium">
+                  Order discarded
+                  {order.discard_reason && (
+                    <span className="ml-2 text-red-300/80 font-normal">
+                      — {DISCARD_REASON_LABELS[order.discard_reason as DiscardReason] ?? order.discard_reason}
+                    </span>
+                  )}
+                </p>
+                <p className="text-[#666] text-xs mt-0.5">
+                  {order.discarded_by && <>By {order.discarded_by}</>}
+                  {order.discarded_at && <> · {format(new Date(order.discarded_at), 'd MMM yyyy, HH:mm')}</>}
+                </p>
+                {order.discard_notes && (
+                  <p className="text-[#888] text-xs mt-1.5">{order.discard_notes}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Rescan alert cards */}
           {rescans.map((rescan: any) => (
@@ -266,9 +265,9 @@ export default function OrderDetailPage() {
               </div>
               <span className={clsx(
                 'px-3 py-1 rounded-full text-xs font-medium border',
-                STATUS_STYLES[order.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]'
+                statusStyle(order.status)
               )}>
-                {order.status.replace('_', ' ')}
+                {statusLabel(order.status)}
               </span>
             </div>
 
@@ -504,7 +503,7 @@ export default function OrderDetailPage() {
                     {roll.is_blank && (
                       <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-[11px]">Blank</span>
                     )}
-                    <span className={clsx('px-2 py-0.5 rounded-full text-[11px] border', STATUS_STYLES[roll.status] || 'bg-[#1a1a1a] text-[#555] border-[#2a2a2a]')}>
+                    <span className={clsx('px-2 py-0.5 rounded-full text-[11px] border', rollStatusStyle(roll.status))}>
                       {displayRollStatus(roll.status)}
                     </span>
                   </div>
@@ -549,7 +548,7 @@ export default function OrderDetailPage() {
                     disabled={statusMutation.isPending}
                     className="w-full flex items-center justify-between px-3 py-2.5 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-[#ff6600]/50 text-[#888] hover:text-white rounded-lg text-sm transition-all"
                   >
-                    <span className="capitalize">{s.replace('_', ' ')}</span>
+                    <span>{statusLabel(s)}</span>
                     <ChevronDown size={14} className="rotate-[-90deg]" />
                   </button>
                 ))}
@@ -625,6 +624,23 @@ export default function OrderDetailPage() {
             </div>
           </div>
 
+          {/* Discard — remove a mis-entered order from the pipeline */}
+          {canDiscard && (
+            <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5">
+              <p className="text-[#555] text-xs uppercase tracking-wider mb-2">Discard</p>
+              <p className="text-[#444] text-xs mb-3">
+                Remove this order from the pipeline if it should never have been created — e.g. a
+                charge correction or duplicate sale. Twin checks are released.
+              </p>
+              <button
+                onClick={() => setShowDiscardModal(true)}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-red-500/40 text-[#555] hover:text-red-400 rounded-lg text-xs transition-all"
+              >
+                <Trash2 size={12} /> Discard Order
+              </button>
+            </div>
+          )}
+
           {/* Admin — Reset Twin Checks */}
           {hasArchivedTwins && (
             <div className="bg-[#111] border border-[#2a2a2a] rounded-xl p-5">
@@ -648,6 +664,16 @@ export default function OrderDetailPage() {
 
         </div>
       </div>
+
+      {/* Discard modal */}
+      {showDiscardModal && (
+        <DiscardModal
+          orderNumber={order.order_number}
+          isPending={discardMutation.isPending}
+          onConfirm={(reason, notes) => discardMutation.mutate({ reason, notes })}
+          onClose={() => setShowDiscardModal(false)}
+        />
+      )}
     </div>
   )
 }

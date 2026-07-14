@@ -1,121 +1,34 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { useAuth } from '../../hooks/useAuth'
-import {
-  LayoutDashboard, FilmIcon, PackagePlus, LogOut,
-  ChevronRight, Store, Menu, X
-} from 'lucide-react'
+import { Outlet } from 'react-router-dom'
+import { FilmIcon, Menu, X } from 'lucide-react'
 import { useState } from 'react'
-import clsx from 'clsx'
+import Sidebar from './Sidebar'
+import RefundWarningsTray from '../RefundWarningsTray'
 
-const NAV = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/orders', icon: FilmIcon, label: 'Orders' },
-  { to: '/intake', icon: PackagePlus, label: 'Film Intake' },
-]
+const COLLAPSE_KEY = 'rollcall-sidebar-collapsed'
 
 export default function Layout() {
-  const { user, logout } = useAuth()
-  const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
 
-  const handleLogout = () => {
-    logout()
-    navigate('/login')
+  const toggleCollapse = () => {
+    setCollapsed(c => {
+      localStorage.setItem(COLLAPSE_KEY, c ? '0' : '1')
+      return !c
+    })
   }
-
-  const Sidebar = ({ mobile = false }: { mobile?: boolean }) => (
-    <aside className={clsx(
-      'flex flex-col h-full bg-[#0f0f0f] border-r border-[#1e1e1e]',
-      mobile ? 'w-full' : 'w-60'
-    )}>
-      {/* Logo */}
-      <div className="px-6 py-5 border-b border-[#1e1e1e]">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#ff6600] flex items-center justify-center flex-shrink-0">
-            <FilmIcon size={16} className="text-white" />
-          </div>
-          <div>
-            <p className="text-white font-semibold text-sm leading-none tracking-wide">digiPrint</p>
-            <p className="text-[#555] text-[10px] mt-0.5 uppercase tracking-widest">Operations</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Store badge */}
-      {user?.store_id && (
-        <div className="px-4 pt-4">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a]">
-            <Store size={13} className="text-[#ff6600]" />
-            <span className="text-[#aaa] text-xs font-medium">
-              {/* Would resolve store name from store_id in a real app */}
-              Store View
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
-        <p className="text-[#444] text-[10px] uppercase tracking-widest font-medium px-3 mb-2">Menu</p>
-        {NAV.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            onClick={() => setMobileOpen(false)}
-            className={({ isActive }) => clsx(
-              'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all group',
-              isActive
-                ? 'bg-[#ff6600] text-white font-medium'
-                : 'text-[#888] hover:text-white hover:bg-[#1a1a1a]'
-            )}
-          >
-            {({ isActive }) => (
-              <>
-                <Icon size={16} className={isActive ? 'text-white' : 'text-[#555] group-hover:text-[#888]'} />
-                <span className="flex-1">{label}</span>
-                {isActive && <ChevronRight size={14} />}
-              </>
-            )}
-          </NavLink>
-        ))}
-      </nav>
-
-      {/* User footer */}
-      <div className="px-3 pb-4 border-t border-[#1e1e1e] pt-3">
-        <div className="flex items-center gap-3 px-3 py-2 mb-1">
-          <div className="w-7 h-7 rounded-full bg-[#ff6600]/20 border border-[#ff6600]/30 flex items-center justify-center flex-shrink-0">
-            <span className="text-[#ff6600] text-[11px] font-bold uppercase">
-              {user?.initials || user?.full_name?.[0] || '?'}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-medium truncate">{user?.full_name}</p>
-            <p className="text-[#555] text-[10px] capitalize">{user?.role?.replace('_', ' ')}</p>
-          </div>
-        </div>
-        <button
-          onClick={handleLogout}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[#666] hover:text-[#ff4444] hover:bg-[#1a1a1a] text-sm transition-all"
-        >
-          <LogOut size={14} />
-          <span>Sign out</span>
-        </button>
-      </div>
-    </aside>
-  )
 
   return (
     <div className="flex h-screen bg-[#0a0a0a] overflow-hidden">
       {/* Desktop sidebar */}
       <div className="hidden lg:flex flex-shrink-0">
-        <Sidebar />
+        <Sidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
       </div>
 
       {/* Mobile overlay */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="w-60 h-full">
-            <Sidebar mobile />
+            <Sidebar mobile onNavigate={() => setMobileOpen(false)} />
           </div>
           <div
             className="flex-1 bg-black/60 backdrop-blur-sm"
@@ -147,6 +60,9 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Unmatched refunds — floats above all pages */}
+      <RefundWarningsTray />
     </div>
   )
 }

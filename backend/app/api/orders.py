@@ -54,6 +54,7 @@ async def list_orders(
     include_terminal: bool = Query(False, description="Include cancelled and discarded orders"),
     film_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    twin: Optional[str] = Query(None, description="Exact twin check match (zero-padded to 4 digits)"),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
     db: AsyncSession = Depends(get_db),
@@ -82,7 +83,7 @@ async def list_orders(
             statuses += list(TERMINAL_STATUSES)
 
     orders = await order_service.list_orders(
-        db, store_id, statuses, search, limit, offset, film_type=film_type
+        db, store_id, statuses, search, limit, offset, film_type=film_type, twin=twin
     )
     return [_enrich(o) for o in orders]
 
