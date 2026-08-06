@@ -32,11 +32,11 @@ TEMPLATE_MAP = {
 }
 
 SUBJECT_MAP = {
-    "scans_ready":            "Your film scans are ready, {first_name} | Order {order_number}",
-    "prints_and_scans_ready": "Your prints and scans are ready, {first_name} | Order {order_number}",
-    "prints_ready":           "Your prints are ready for collection | Order {order_number}",
-    "negatives_ready":        "Your negatives are ready — Order {order_number}",
-    "blank_notification":     "{first_name}, an update on your recent order {order_number}",
+    "scans_ready":            "{first_name}, your film scans are ready | Order {order_number}",
+    "prints_and_scans_ready": "{first_name}, your prints and scans are ready | Order {order_number}",
+    "prints_ready":           "{first_name}, your prints are ready for collection | Order {order_number}",
+    "negatives_ready":        "{first_name}, your negatives are ready | Order {order_number}",
+    "blank_notification":     "{first_name}, an update on your recent order | Order {order_number}",
 }
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ def _get_store_settings(store_id: str) -> dict:
     # Safe fallback defaults
     return {
         "print_storage_days": 30,
-        "negative_storage_days": 30,
+        "negative_storage_days": 14,
         "drive_storage_days": 90,
         "google_review_url": None,
         "address_line": None,
@@ -141,6 +141,31 @@ def _get_crosssell_flags(order: dict) -> dict:
         "crosssell_border":  not has_border,
         "crosssell_contact": not has_contact,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helper — comma-separated service list for the "Bring this when you
+# collect" card, e.g. "Hi-Res Scans, Bordered Scans, Negatives"
+# ---------------------------------------------------------------------------
+def _compute_service_list(
+    has_scans: bool, has_prints: bool, has_border: bool,
+    has_contact: bool, has_hires: bool,
+) -> str:
+    parts: List[str] = []
+    if has_hires:
+        parts.append("Hi-Res Scans")
+    elif has_scans:
+        parts.append("Scans")
+    if has_prints:
+        parts.append("Prints")
+    if has_border:
+        parts.append("Bordered Scans")
+    if has_contact:
+        parts.append("Contact Sheet")
+    # Every developed roll produces negatives regardless of what else was
+    # ordered — always listed last.
+    parts.append("Negatives")
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +322,7 @@ def send_order_email(
     # --- Store settings (storage policy + review URL + email branding) ---
     store_settings = _get_store_settings(store_id) if store_id else {}
     print_days        = store_settings.get("print_storage_days", 30)
-    negative_days     = store_settings.get("negative_storage_days", 30)
+    negative_days     = store_settings.get("negative_storage_days", 14)
     drive_days        = store_settings.get("drive_storage_days", 90)
     google_review_url = store_settings.get("google_review_url")
 
@@ -318,6 +343,12 @@ def send_order_email(
     has_prints   = "print" in service_type
     has_border   = bool(order.get("border_scan"))
     has_contact  = bool(order.get("contact_sheet"))
+    # hires_scan has no backing DB column yet — this flag is forward-compatible
+    # and will simply stay False until that SKU/column is added.
+    has_hires    = "hires" in service_type or bool(order.get("hires_scan"))
+
+    # --- Service list for the "Bring this when you collect" card ---
+    service_list = _compute_service_list(has_scans, has_prints, has_border, has_contact, has_hires)
 
     # --- Rolls-derived stats (rolls_count, frames_count, twin_check_range) ---
     rolls = _get_order_rolls(order)
@@ -359,6 +390,8 @@ def send_order_email(
             has_prints=has_prints,
             has_border=has_border,
             has_contact=has_contact,
+            has_hires=has_hires,
+            service_list=service_list,
             # Storage expiry
             drive_expiry=drive_expiry,
             print_expiry=print_expiry,
