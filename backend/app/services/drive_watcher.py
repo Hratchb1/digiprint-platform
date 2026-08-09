@@ -99,17 +99,42 @@ def _get_store_paths(config: dict) -> tuple[Path, Path]:
 
 
 def _strip_prefix(folder_name: str, store_id: str) -> Optional[str]:
+    """
+    Extract the twin check from a Drive folder name.
+
+    Store-aware: if store_settings.twin_folder_prefix is set for this store,
+    that literal prefix is stripped first — a store convention is only
+    matched against folders that actually carry it. Stores with no prefix
+    configured match the folder name as-is.
+
+    Whatever remains is then normalized numerically rather than matched by
+    exact string shape: non-digit characters are discarded, the digits are
+    parsed as an int, and re-padded to the canonical 4-digit twin_check
+    format. This is what makes "00000001" resolve to "0001" — Bondi and
+    Miranda's scanning app emits a fixed 0000 pad ahead of the twin, so the
+    literal folder name is 4 digits longer than the stored twin_check. A
+    strict "exactly 4 digits" match (the old behaviour) rejects that outright;
+    int-normalizing accepts any amount of leading-zero padding.
+    """
     prefix = _get_prefix(store_id)
+    remainder = folder_name
+
     if prefix:
-        if folder_name.startswith(prefix):
-            raw = folder_name[len(prefix):]
-            if re.fullmatch(r"\d{4}", raw):
-                return raw
+        if not folder_name.startswith(prefix):
+            return None
+        remainder = folder_name[len(prefix):]
+
+    digits = re.sub(r"\D", "", remainder)
+    if not digits:
         return None
-    else:
-        if re.fullmatch(r"\d{4}", folder_name):
-            return folder_name
+
+    twin = str(int(digits)).zfill(4)
+    if len(twin) != 4:
+        # More significant digits than a real twin check can have (max
+        # 9999) — don't guess, treat as unparseable rather than risk a
+        # false match.
         return None
+    return twin
 
 
 def _build_prefix(twin: str, store_id: str) -> str:
