@@ -405,9 +405,14 @@ def _iso(dt) -> Optional[str]:
 
 def _enrich(order: Order) -> dict:
     """Serialize order to dict for frontend."""
-    order_date = None
-    if hasattr(order, "order_date") and order.order_date:
-        order_date = order.order_date.isoformat() if hasattr(order.order_date, "isoformat") else str(order.order_date)
+    # "Sale date" on the Orders list (see OrdersPage.tsx) is the Pronto
+    # order date — order_date is not a column on Order, only
+    # pronto_order_date is (orm.py), so hasattr(order, "order_date") was
+    # always False here and this silently rendered "—" for every order
+    # regardless of whether pronto_order_date had a real value. Confirmed
+    # against live data: 5,591 of 5,607 orders (99.7%) have a
+    # pronto_order_date that was never reaching the frontend.
+    order_date = _iso(order.pronto_order_date)
 
     return {
         "id": str(order.id),
