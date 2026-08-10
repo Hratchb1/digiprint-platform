@@ -227,6 +227,11 @@ def _compute_rolls_count(rolls: List[dict]) -> int:
     return sum(1 for r in rolls if not r.get("is_blank"))
 
 
+def _compute_blank_roll_count(rolls: List[dict]) -> int:
+    """Count of rolls confirmed blank on this order."""
+    return sum(1 for r in rolls if r.get("is_blank"))
+
+
 def _compute_frames_count(rolls_count: int) -> int:
     """
     Estimated frame count. See DEFAULT_FRAMES_PER_ROLL note above —
@@ -355,6 +360,7 @@ def send_order_email(
     rolls_count       = _compute_rolls_count(rolls)
     frames_count      = _compute_frames_count(rolls_count)
     twin_check_range  = _compute_twin_check_range(rolls)
+    blank_roll_count  = _compute_blank_roll_count(rolls)
 
     # --- Service label (customer-facing version of order_type) ---
     service_label = _compute_service_label(order.get("order_type"))
@@ -403,7 +409,7 @@ def send_order_email(
             # Review
             google_review_url=google_review_url,
             # Blank roll
-            blank_roll_count=order.get("blank_roll_count") or 0,
+            blank_roll_count=blank_roll_count,
             # ── v4 additions ──
             # Order-level derived stats
             rolls_count=rolls_count or None,
