@@ -9,6 +9,7 @@ import { cn } from '../lib/cn'
 import { ACTIVE_STATUSES, ORDER_STATUSES, isTerminal, statusLabel } from '../lib/status'
 import { formatDate } from '../lib/format'
 import StatusPill from '../components/ui/StatusPill'
+import { filmTypeMeta, filmTypeBorder } from '../lib/filmType'
 
 export default function OrdersPage() {
   const { user } = useAuth()
@@ -145,19 +146,28 @@ export default function OrdersPage() {
           <div className="divide-y divide-[#171717]">
             {orders.map((order: any) => {
               const terminal = isTerminal(order.status)
+              const film = filmTypeMeta(order.film_type)
               return (
                 <Link
                   key={order.id}
                   to={`/orders/${order.id}`}
                   className={cn(
-                    'flex md:grid md:grid-cols-[1fr_1fr_120px_80px_60px_120px_120px_32px] items-center gap-4 px-5 py-3.5 hover:bg-[#161616] transition-colors group',
+                    'flex md:grid md:grid-cols-[1fr_1fr_120px_80px_60px_120px_120px_32px] items-center gap-4 px-5 py-3.5 hover:bg-[#161616] transition-colors group border-l-2',
+                    filmTypeBorder(order.film_type),
                     terminal && 'opacity-60',
                   )}
                 >
                   <div>
-                    <p className={cn('text-white text-sm font-mono font-medium truncate', terminal && 'line-through text-[#666]')}>
-                      {order.order_number}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className={cn('text-white text-sm font-mono font-medium truncate', terminal && 'line-through text-[#666]')}>
+                        {order.order_number}
+                      </p>
+                      {film && (
+                        <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0', film.dot)}>
+                          {film.label}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[#444] text-xs truncate md:hidden">{order.customer_name}</p>
                   </div>
                   <p className={cn('text-[#888] text-sm truncate hidden md:block', terminal && 'line-through text-[#555]')}>

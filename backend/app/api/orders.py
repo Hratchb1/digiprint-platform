@@ -453,6 +453,10 @@ def _enrich(order: Order) -> dict:
         "refund_status": order.refund_status,
         "refund_amount": order.refund_amount,
         "notes": order.notes,
+        # Set by order_service._attach_film_types() on list_orders — not an
+        # ORM column, so getattr with a default handles single-order fetches
+        # (get_order) that don't attach it.
+        "film_type": getattr(order, "film_type", None),
         "rolls": [
             {
                 "id": str(r.id),

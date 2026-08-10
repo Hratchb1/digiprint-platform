@@ -222,7 +222,49 @@ class OrderService:
             ))
         q = q.limit(limit).offset(offset)
         result = await db.execute(q)
-        return result.scalars().all()
+        orders = result.scalars().all()
+
+        await self._attach_film_types(db, orders)
+        return orders
+
+    async def _attach_film_types(self, db: AsyncSession, orders: List[Order]) -> None:
+        """
+        Sets a transient `.film_type` attribute on each Order for the
+        OrdersPage colour-coding — not a column on Order, so it's not
+        persisted or part of the ORM mapping. film_type lives on
+        pronto_cache lines (one row per SKU line item), keyed by
+        sales_order_number, not on orders directly — see the film_type
+        filter above for the same relationship. Manual-entry orders and
+        anything without a matching pronto_order_number simply get None.
+
+        Batched into a single extra query (DISTINCT ON per order number,
+        earliest-seen non-null film_type wins when an order has multiple
+        SKU lines with different values) rather than one query per order.
+        """
+        pronto_numbers = {o.pronto_order_number for o in orders if o.pronto_order_number}
+        if not pronto_numbers:
+            for o in orders:
+                o.film_type = None
+            return
+
+        pronto_cache = table(
+            "pronto_cache",
+            column("sales_order_number"), column("film_type"), column("first_seen_at"),
+        )
+        film_q = (
+            select(pronto_cache.c.sales_order_number, pronto_cache.c.film_type)
+            .distinct(pronto_cache.c.sales_order_number)
+            .where(
+                pronto_cache.c.sales_order_number.in_(pronto_numbers),
+                pronto_cache.c.film_type.isnot(None),
+            )
+            .order_by(pronto_cache.c.sales_order_number, pronto_cache.c.first_seen_at.asc())
+        )
+        film_result = await db.execute(film_q)
+        film_type_map = dict(film_result.all())
+
+        for o in orders:
+            o.film_type = film_type_map.get(o.pronto_order_number)
 
     async def _get_existing_twins(self, db: AsyncSession, store_id: UUID) -> set:
         result = await db.execute(

@@ -231,6 +231,10 @@ class OrderRead(BaseModel):
     refund_amount: Optional[float] = None
     rolls: List[RollRead] = []
     notes: Optional[str]
+    # Live-joined from pronto_cache for OrdersPage colour-coding — see
+    # order_service._attach_film_types(). None for manual entries or any
+    # order without a matching Pronto sales order.
+    film_type: Optional[str] = None
 
     class Config:
         from_attributes = True
