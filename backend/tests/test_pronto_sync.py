@@ -483,6 +483,136 @@ class TestCashSaleFallback:
 
 
 # ══════════════════════════════════════════════════════════════
+# 8b. Primary account-number matching (account + SKU + abs(qty) + earliest)
+# ══════════════════════════════════════════════════════════════
+
+class TestPrimaryAccountMatch:
+
+    @staticmethod
+    def _table_side_effect(orders_data, cache_data):
+        def table_side_effect(name: str):
+            mock = MagicMock()
+            mock.select.return_value = mock
+            mock.eq.return_value = mock
+            mock.neq.return_value = mock
+            mock.in_.return_value = mock
+            mock.gt.return_value = mock
+            mock.order.return_value = mock
+
+            if name == "orders":
+                result = MagicMock()
+                result.data = orders_data
+                mock.execute.return_value = result
+            elif name == "pronto_cache":
+                result = MagicMock()
+                result.data = cache_data
+                mock.execute.return_value = result
+            else:
+                mock.execute.return_value = MagicMock(data=[])
+            return mock
+
+        return table_side_effect
+
+    def test_exact_account_match_returns_exact_confidence(self):
+        candidate_order = {
+            "id":                  "order-uuid-primary",
+            "pronto_order_number": "SO-100",
+            "status":              "inbound",
+            "store_id":            "store-bond-uuid",
+            "refund_status":       None,
+            "pronto_order_date":   "2026-03-01",
+        }
+        original_cache = [{"sku_code": "C41-35", "shipped_units": 1}]
+
+        client = MagicMock()
+        client.table.side_effect = self._table_side_effect([candidate_order], original_cache)
+
+        refund_rows = [
+            _make_row(order_num="SO-REF-100", sku_code="C41-35",
+                      shipped_units="-1", pronto_account="ACC100")
+        ]
+
+        matched, confidence = _match_refund(refund_rows, client)
+
+        assert matched is not None
+        assert matched["pronto_order_number"] == "SO-100"
+        assert confidence == "exact"
+
+    def test_qty_must_match_abs_exactly_partial_qty_does_not_match(self):
+        """
+        Original order shipped 2 units of C41-35; refund only claims 1 —
+        abs(qty) must match the original exactly (a partial refund isn't a
+        SKU-signature match here, it's handled separately by _refund_is_full
+        for full-vs-partial once a match IS found), so this candidate must
+        be skipped rather than matched.
+        """
+        candidate_order = {
+            "id":                  "order-uuid-qtymismatch",
+            "pronto_order_number": "SO-101",
+            "status":              "inbound",
+            "store_id":            "store-bond-uuid",
+            "refund_status":       None,
+            "pronto_order_date":   "2026-03-01",
+        }
+        original_cache = [{"sku_code": "C41-35", "shipped_units": 2}]
+
+        client = MagicMock()
+        client.table.side_effect = self._table_side_effect([candidate_order], original_cache)
+
+        refund_rows = [
+            _make_row(order_num="SO-REF-101", sku_code="C41-35",
+                      shipped_units="-1", pronto_account="ACC101")
+        ]
+
+        matched, confidence = _match_refund(refund_rows, client)
+
+        assert matched is None
+        assert confidence == "unmatched"
+
+    def test_earliest_candidate_among_multiple_matches_wins(self):
+        """
+        _match_refund queries orders .order('pronto_order_date', desc=False)
+        — ascending — and returns the first candidate whose SKU signature
+        matches. With two orders that both match on SKU signature, the one
+        earlier in the (already-ascending) result list must win.
+        """
+        earlier_order = {
+            "id":                  "order-uuid-earlier",
+            "pronto_order_number": "SO-EARLY",
+            "status":              "inbound",
+            "store_id":            "store-bond-uuid",
+            "refund_status":       None,
+            "pronto_order_date":   "2026-01-01",
+        }
+        later_order = {
+            "id":                  "order-uuid-later",
+            "pronto_order_number": "SO-LATE",
+            "status":              "inbound",
+            "store_id":            "store-bond-uuid",
+            "refund_status":       None,
+            "pronto_order_date":   "2026-06-01",
+        }
+        original_cache = [{"sku_code": "C41-35", "shipped_units": 1}]
+
+        client = MagicMock()
+        # Ascending order, as the real query requests — earlier_order first.
+        client.table.side_effect = self._table_side_effect(
+            [earlier_order, later_order], original_cache
+        )
+
+        refund_rows = [
+            _make_row(order_num="SO-REF-EARLY", sku_code="C41-35",
+                      shipped_units="-1", pronto_account="ACC-MULTI")
+        ]
+
+        matched, confidence = _match_refund(refund_rows, client)
+
+        assert matched is not None
+        assert matched["pronto_order_number"] == "SO-EARLY"
+        assert confidence == "exact"
+
+
+# ══════════════════════════════════════════════════════════════
 # 9. Unmatched refund → refund_warnings
 # ══════════════════════════════════════════════════════════════
 
