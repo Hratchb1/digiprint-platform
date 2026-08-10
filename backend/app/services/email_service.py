@@ -466,13 +466,43 @@ def send_order_email(
 # ---------------------------------------------------------------------------
 def _derive_template_key(order: dict) -> str:
     """
-    Pick the appropriate email template based on order_type.
-    Falls back to blank_notification when no match is found.
+    Pick the appropriate email template from the order's ROLLS, not
+    order_type. order_type is a coarse category ('film'/'b2b'/'print_only'/
+    'passport') set once at intake/Pronto-sync — it never carries service
+    info like "Dev+Scan", so keying off it silently defaulted almost every
+    order to blank_notification (see order 3939686: order_type='film').
+
+    blank_notification fires only when every roll on the order is confirmed
+    blank (is_blank=True). A mix of blank and good rolls still gets the
+    normal scans/prints template — that template renders its own blank-roll
+    notice via blank_roll_count, it doesn't need the standalone one.
+
+    Otherwise, derive from each roll's service_type. An order can carry
+    rolls with different service types; the richest combination present
+    wins (prints_and_scans > scans > prints > negatives):
+      Dev+Scan+Print          -> prints_and_scans_ready
+      Dev+Scan / Scan only    -> scans_ready
+      Dev+Print / Print only  -> prints_ready
+      Dev only                -> negatives_ready
+
+    Unknown/empty service_type on every roll (or no rolls at all) never
+    falls back to blank_notification — defaults to scans_ready and logs a
+    warning, so a data gap is visible instead of silently mis-sent.
     """
-    order_type = (order.get("order_type") or "").lower()
-    has_scan  = "scan" in order_type
-    has_print = "print" in order_type
-    has_neg   = "neg" in order_type or "negative" in order_type
+    rolls = _get_order_rolls(order)
+
+    if rolls and all(r.get("is_blank") for r in rolls):
+        return "blank_notification"
+
+    has_scan = has_print = has_dev_only = False
+    for r in rolls:
+        service = (r.get("service_type") or "").strip().lower()
+        if "scan" in service:
+            has_scan = True
+        if "print" in service:
+            has_print = True
+        if service == "dev only":
+            has_dev_only = True
 
     if has_scan and has_print:
         return "prints_and_scans_ready"
@@ -480,9 +510,15 @@ def _derive_template_key(order: dict) -> str:
         return "scans_ready"
     if has_print:
         return "prints_ready"
-    if has_neg:
+    if has_dev_only:
         return "negatives_ready"
-    return "blank_notification"
+
+    logger.warning(
+        f"[_derive_template_key] Could not determine service type from rolls "
+        f"for order {order.get('order_number') or order.get('id')} "
+        f"({len(rolls)} roll(s)) — defaulting to scans_ready"
+    )
+    return "scans_ready"
 
 
 # ---------------------------------------------------------------------------
