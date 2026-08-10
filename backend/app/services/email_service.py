@@ -311,7 +311,14 @@ def send_order_email(
     customer_email = order.get("customer_email")
     store_name     = order.get("store_name") or "digiDirect"
     store_id       = order.get("store_id")
-    account_number = order.get("customer_account") or order.get("account_number") or None
+    # The order dict's account field is always "account" (orders.account
+    # column — see _enrich() in api/orders.py and the Supabase select in
+    # send_manual_email above). "customer_account"/"account_number" are
+    # never actually set by any caller, so this always evaluated to None
+    # regardless of whether the order had a real account number — the
+    # "Account number" row in the collection-details card has been
+    # silently hidden on every email ever sent.
+    account_number = order.get("account") or None
 
     # Invoice date — formatted
     raw_date = order.get("order_date") or order.get("created_at")
