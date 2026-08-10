@@ -578,16 +578,39 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
     }).execute()
 
     try:
-        from app.services.email_service import send_order_email, _derive_template_key
+        from app.services.email_service import send_order_email, _derive_template_key, _title_name, SUBJECT_MAP
         order["drive_order_folder_url"] = drive_url
         order["service_type"] = order.get("order_type") or ""
         template_key = _derive_template_key(order)
         sent = send_order_email(order, template_key, drive_url=drive_url)
 
+        # Mirror the email_log row send_manual_email writes on success — the
+        # Order Detail email panel reads this table, and until now the
+        # watcher's auto-send path never wrote to it, so watcher-delivered
+        # orders showed "Not sent" in the UI even though the email went out
+        # (confirmed on order 3939686).
+        try:
+            customer_name = _title_name(order.get("customer_name"))
+            first_name = customer_name.split()[0] if customer_name != "there" else "there"
+            subject = SUBJECT_MAP.get(template_key, "An update on your order").format(
+                first_name=first_name,
+                order_number=order.get("order_number") or "—",
+            )
+            client.table("email_log").insert({
+                "order_id": order_id,
+                "email_type": template_key,
+                "recipient": order.get("customer_email") or "unknown",
+                "subject": subject,
+                "status": "sent" if sent else "failed",
+            }).execute()
+        except Exception as e:
+            logger.warning(f"[drive_watcher] Could not write to email_log: {e}")
+
         if sent:
             client.table("orders").update({
                 "status": "delivered",
                 "delivered_at": datetime.utcnow().isoformat(),
+                "email_status": "sent",
             }).eq("id", order_id).execute()
 
             client.table("order_events").insert({
