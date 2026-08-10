@@ -18,6 +18,7 @@ from supabase import create_client
 
 from app.core.config import settings
 from app.core.auth import get_current_user
+from app.core.timeutils import utcnow
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ def _client():
 
 def _today_aest_utc_window() -> tuple[str, str]:
     """UTC [start, end) ISO strings covering the current AEST calendar day."""
-    now_aest = datetime.utcnow() + AEST_OFFSET
+    now_aest = utcnow() + AEST_OFFSET
     start_aest = now_aest.replace(hour=0, minute=0, second=0, microsecond=0)
     start_utc = start_aest - AEST_OFFSET
     return start_utc.isoformat(), (start_utc + timedelta(days=1)).isoformat()
@@ -143,13 +144,13 @@ def _missing_email_ids(client) -> list[str]:
 
 
 def _overdue_ids(client) -> list[str]:
-    cutoff = (datetime.utcnow() - timedelta(hours=48)).isoformat()
+    cutoff = (utcnow() - timedelta(hours=48)).isoformat()
     return _order_ids(client, status="booked_in", booked_in_at=("lt", cutoff))
 
 
 def _needs_attention_blocking() -> dict:
     client = _client()
-    cutoff_24h = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    cutoff_24h = (utcnow() - timedelta(hours=24)).isoformat()
 
     overdue = _overdue_ids(client)
     stuck = _order_ids(client, status="scanning", scanning_at=("lt", cutoff_24h))
@@ -203,7 +204,7 @@ def _performance_blocking() -> dict:
     start, end = _today_aest_utc_window()
 
     # Average turnaround over the last 30 days of deliveries
-    cutoff_30d = (datetime.utcnow() - timedelta(days=30)).isoformat()
+    cutoff_30d = (utcnow() - timedelta(days=30)).isoformat()
     delivered = _fetch_all(
         lambda: client.table("orders").select("booked_in_at, delivered_at")
         .eq("status", "delivered").gte("delivered_at", cutoff_30d)
@@ -243,7 +244,7 @@ async def dashboard_workload(current_user: dict = Depends(get_current_user)):
 
 def _workload_blocking() -> dict:
     client = _client()
-    now = datetime.utcnow()
+    now = utcnow()
 
     pending = _fetch_all(
         lambda: client.table("orders").select("id, pronto_order_date, created_at")

@@ -21,6 +21,7 @@ from googleapiclient.http import MediaFileUpload
 from supabase import create_client
 
 from app.core.config import settings
+from app.core.timeutils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -526,7 +527,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
     _set_folder_public(service, order_folder_id)
 
     client.table("rolls").update({
-        "date_scanned": datetime.utcnow().isoformat(),
+        "date_scanned": utcnow().isoformat(),
         "drive_folder_url": drive_url,
         "status": "scanned",
     }).eq("id", roll_id).execute()
@@ -541,7 +542,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
     if order.get("status") == "booked_in":
         client.table("orders").update({
             "status": "scanning",
-            "scanning_at": datetime.utcnow().isoformat(),
+            "scanning_at": utcnow().isoformat(),
         }).eq("id", order_id).execute()
         order["status"] = "scanning"
 
@@ -566,7 +567,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
     # sends successfully (see below).
     client.table("orders").update({
         "drive_order_folder_url": drive_url,
-        "date_scanned": datetime.utcnow().isoformat(),
+        "date_scanned": utcnow().isoformat(),
     }).eq("id", order_id).execute()
 
     client.table("order_events").insert({
@@ -609,7 +610,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
         if sent:
             client.table("orders").update({
                 "status": "delivered",
-                "delivered_at": datetime.utcnow().isoformat(),
+                "delivered_at": utcnow().isoformat(),
                 "email_status": "sent",
             }).eq("id", order_id).execute()
 

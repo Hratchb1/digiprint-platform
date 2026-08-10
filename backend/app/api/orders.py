@@ -3,11 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime
 import asyncio
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
+from app.core.timeutils import utcnow
 from app.models.schemas import (
     OrderCreate, OrderRead, OrderSummary, OrderStatusUpdate,
     OrderMarkBlank, OrderSetDriveLink, RollsAddPayload, OrderDiscardRequest
@@ -382,7 +382,7 @@ async def discard_order(
 
     operator = payload.operator_id or _actor(current_user)
     order.status = "discarded"
-    order.discarded_at = datetime.utcnow()
+    order.discarded_at = utcnow()
     order.discarded_by = operator
     order.discard_reason = payload.reason.value
     order.discard_notes = payload.notes

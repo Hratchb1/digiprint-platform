@@ -3,13 +3,14 @@ from sqlalchemy import select, func, and_, or_, table, column
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 
 from app.models.orm import Order, Roll, OrderEvent, Store
 from app.models.schemas import (
     OrderCreate, OrderStatusUpdate, DashboardStats
 )
+from app.core.timeutils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class OrderService:
             operator_initials=payload.operator_initials,
             notes=payload.notes,
             status="booked_in",
-            booked_in_at=datetime.utcnow(),
+            booked_in_at=utcnow(),
             # Set addon flags directly on the ORM object
             border_scan=addon_flags.get("border_scan", False),
             contact_sheet=addon_flags.get("contact_sheet", False),
@@ -174,7 +175,7 @@ class OrderService:
     ) -> None:
         """Promote an inbound order to booked_in and log the activity event."""
         order.status = "booked_in"
-        order.booked_in_at = datetime.utcnow()
+        order.booked_in_at = utcnow()
         await self._log_event(
             db, order.id, "order_booked_in",
             f"Inbound order promoted to booked_in"
@@ -288,11 +289,11 @@ class OrderService:
         order.status = new_status
 
         if new_status == "delivered":
-            order.date_delivered = datetime.utcnow()
+            order.date_delivered = utcnow()
             for roll in order.rolls:
                 if roll.status not in ("blank", "archived"):
                     roll.status = "delivered"
-                    roll.date_delivered = datetime.utcnow()
+                    roll.date_delivered = utcnow()
 
         # --- Twin check expiry ---
         if new_status in TWIN_EXPIRY_STATUSES:
@@ -355,7 +356,7 @@ class OrderService:
             if roll.id in roll_ids:
                 roll.is_blank = True
                 roll.status = "blank"
-                roll.blank_confirmed_at = datetime.utcnow()
+                roll.blank_confirmed_at = utcnow()
                 blank_twins.append(roll.twin_check)
 
         order.has_blanks = True
@@ -363,7 +364,7 @@ class OrderService:
             # "blank" is no longer a valid order-level status (migration 003) —
             # an all-blank order is terminal, so it maps to delivered.
             order.status = "delivered"
-            order.date_delivered = datetime.utcnow()
+            order.date_delivered = utcnow()
 
         await self._log_event(db, order_id, "blanks_marked",
                               f"{len(blank_twins)} roll(s) marked blank",
@@ -379,7 +380,7 @@ class OrderService:
             raise ValueError(f"Order {order_id} not found")
 
         order.drive_order_folder_url = drive_url
-        order.date_scanned = datetime.utcnow()
+        order.date_scanned = utcnow()
         if order.status == "booked_in":
             order.status = "scanning"
 
@@ -390,7 +391,7 @@ class OrderService:
         return order
 
     async def get_dashboard_stats(self, db: AsyncSession, store_id: Optional[UUID] = None, period_days: int = 30) -> DashboardStats:
-        since = datetime.utcnow() - timedelta(days=period_days)
+        since = utcnow() - timedelta(days=period_days)
         base_filter = [Order.created_at >= since]
         if store_id:
             base_filter.append(Order.store_id == store_id)
@@ -400,7 +401,7 @@ class OrderService:
         pending = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.status.in_(PENDING_STATUSES))))
         blanks = await db.scalar(select(func.count(Order.id)).where(and_(*base_filter, Order.has_blanks == True)))
 
-        overdue_cutoff = datetime.utcnow() - timedelta(hours=48)
+        overdue_cutoff = utcnow() - timedelta(hours=48)
         overdue_filter = [Order.created_at < overdue_cutoff, Order.status.in_(PENDING_STATUSES)]
         if store_id:
             overdue_filter.append(Order.store_id == store_id)
@@ -411,7 +412,7 @@ class OrderService:
             .where(and_(*base_filter, Order.date_delivered.isnot(None)))
         )
 
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         today_filter = [Order.created_at >= today_start]
         if store_id:
             today_filter.append(Order.store_id == store_id)

@@ -11,13 +11,13 @@
 # ============================================================
 
 import asyncio
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from supabase import create_client
 
 from app.core.config import settings
 from app.core.auth import get_current_user
+from app.core.timeutils import utcnow
 from app.models.schemas import RefundWarningResolveRequest, RefundWarningIgnoreRequest
 from app.services.pronto_sync import _apply_refund
 
@@ -45,7 +45,7 @@ def _close_warning(client, warning_id: str, status: str, operator_id: str, notes
     result = client.table("refund_warnings").update({
         "status": status,
         "resolved_by": operator_id,
-        "resolved_at": datetime.utcnow().isoformat(),
+        "resolved_at": utcnow().isoformat(),
         "resolution_notes": notes,
     }).eq("id", warning_id).execute()
     return result.data[0] if result.data else {}

@@ -7,6 +7,7 @@ from typing import Optional, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from supabase import create_client
 from app.core.config import settings
+from app.core.timeutils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def _get_active_promotions() -> list:
     """Fetch all active promotions from the promotions table."""
     try:
         sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-        today = datetime.utcnow().date().isoformat()
+        today = utcnow().date().isoformat()
         result = (
             sb.table("promotions")
             .select("*")
@@ -318,9 +319,9 @@ def send_order_email(
         if isinstance(raw_date, str):
             base_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
         else:
-            base_date = raw_date or datetime.utcnow()
+            base_date = raw_date or utcnow()
     except Exception:
-        base_date = datetime.utcnow()
+        base_date = utcnow()
 
     invoice_date_str = _format_date_long(base_date)
 
@@ -624,7 +625,7 @@ async def send_manual_email(
             try:
                 sb.table("orders").update({
                     "status": "delivered",
-                    "delivered_at": datetime.utcnow().isoformat(),
+                    "delivered_at": utcnow().isoformat(),
                 }).eq("id", order_id).execute()
                 sb.table("order_events").insert({
                     "order_id": order_id,

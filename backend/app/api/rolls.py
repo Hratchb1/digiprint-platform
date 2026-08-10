@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from uuid import UUID
-from datetime import datetime
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
+from app.core.timeutils import utcnow
 from app.models.orm import Roll, RollAuditLog, OrderEvent, Order
 from app.models.schemas import TwinCheckUpdate
 
@@ -83,7 +83,7 @@ async def update_twin_check(
         old_value=old_twin,
         new_value=payload.twin_check,
         changed_by_user_id=UUID(str(user_id)) if user_id else None,
-        changed_at=datetime.utcnow(),
+        changed_at=utcnow(),
     )
     db.add(audit)
 
