@@ -181,6 +181,9 @@ export default function IntakePage() {
   const [lastTwin, setLastTwin] = useState("");
   const [rangeError, setRangeError] = useState<string | null>(null);
 
+  // Re-entrancy guard for addTwins — see the comment on addTwins below.
+  const addingTwinsRef = useRef(false);
+
   const operatorInputRef = useRef<HTMLInputElement>(null);
   const orderInputRef    = useRef<HTMLInputElement>(null);
   const singleTwinRef    = useRef<HTMLInputElement>(null);
@@ -352,30 +355,44 @@ export default function IntakePage() {
   };
 
   const addTwins = useCallback(async (twinList: string[]) => {
-    const existingInSession = new Set(twins.map((t) => t.twin));
-    const sessionDups = twinList.filter((t) => existingInSession.has(t));
-    if (sessionDups.length > 0) {
-      const msg = `Already added this session: ${sessionDups.join(", ")}`;
-      if (twinMode === "single") setSingleError(msg);
-      else setRangeError(msg);
-      return;
-    }
-
-    let storeDups: string[] = [];
+    // Re-entrancy guard: barcode scanners commonly send a CR+LF Enter
+    // suffix, which fires the input's onKeyDown Enter handler twice in
+    // quick succession for one physical scan. Without this guard, both
+    // calls read the same pre-append `twins` snapshot, both pass the
+    // "not already added this session" check below, and both append —
+    // rendering the same twin as two pills. A fast double-click on the
+    // Add button hits the same path. Only one addTwins call is allowed
+    // to be in flight at a time; the rest of the function is unchanged.
+    if (addingTwinsRef.current) return;
+    addingTwinsRef.current = true;
     try {
-      const storeId = isManualEntry
-        ? manualData.store_id
-        : order?.territory ? TERRITORY_STORE_MAP[order.territory] : undefined;
-      const { data } = await api.post("/rolls/check-twins", { twins: twinList, store_id: storeId });
-      storeDups = data.duplicates || [];
-    } catch { /* endpoint may not exist */ }
+      const existingInSession = new Set(twins.map((t) => t.twin));
+      const sessionDups = twinList.filter((t) => existingInSession.has(t));
+      if (sessionDups.length > 0) {
+        const msg = `Already added this session: ${sessionDups.join(", ")}`;
+        if (twinMode === "single") setSingleError(msg);
+        else setRangeError(msg);
+        return;
+      }
 
-    const entries: TwinEntry[] = twinList.map((twin) => ({
-      twin,
-      status: storeDups.includes(twin) ? "duplicate" : "ok",
-      message: storeDups.includes(twin) ? "Already in use at this store" : undefined,
-    }));
-    setTwins((prev) => [...prev, ...entries]);
+      let storeDups: string[] = [];
+      try {
+        const storeId = isManualEntry
+          ? manualData.store_id
+          : order?.territory ? TERRITORY_STORE_MAP[order.territory] : undefined;
+        const { data } = await api.post("/rolls/check-twins", { twins: twinList, store_id: storeId });
+        storeDups = data.duplicates || [];
+      } catch { /* endpoint may not exist */ }
+
+      const entries: TwinEntry[] = twinList.map((twin) => ({
+        twin,
+        status: storeDups.includes(twin) ? "duplicate" : "ok",
+        message: storeDups.includes(twin) ? "Already in use at this store" : undefined,
+      }));
+      setTwins((prev) => [...prev, ...entries]);
+    } finally {
+      addingTwinsRef.current = false;
+    }
   }, [twins, order, twinMode, isManualEntry, manualData.store_id]);
 
   const handleSingleSubmit = useCallback(async () => {
