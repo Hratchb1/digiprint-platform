@@ -92,8 +92,15 @@ async def manual_drive_sync():
     """Manually trigger the Drive watcher cycle (admin only)."""
     try:
         logger.info("[drive_api] Manual Drive sync triggered")
-        await run_drive_watcher()
-        return {"message": "Drive watcher cycle complete"}
+        result = await run_drive_watcher()
+
+        if result and result.get("status") == "already_running":
+            return {
+                "status": "already_running",
+                "message": "Drive watcher is already running — try again shortly",
+            }
+
+        return {"status": "completed", "message": "Drive watcher cycle complete"}
     except Exception as e:
         logger.error(f"[drive_api] Manual sync failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

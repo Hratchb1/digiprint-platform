@@ -116,6 +116,8 @@ export const driveApi = {
     api.get(`/drive/log/order/${orderId}`).then(r => r.data),
   clearLogEntry: (folderId: string) =>
     api.delete(`/drive/log/${folderId}`).then(r => r.data),
+  sync: (): Promise<{ status: 'completed' | 'already_running'; message: string }> =>
+    api.post('/drive/sync').then(r => r.data),
 }
 
 // ── Dashboard (Phase 3 aggregators) ───────────────────────────────────────

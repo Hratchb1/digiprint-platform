@@ -385,29 +385,44 @@ async def _run_border_processing(
 
 # ── Main watcher ──────────────────────────────────────────────────────────────
 
+# Run-level lock — both the APScheduler 5-min job and the manual
+# POST /api/drive/sync endpoint call run_drive_watcher() directly, so a
+# manual trigger fired mid-cycle (or a double-click) would otherwise start
+# a second, overlapping cycle. Only per-folder work was guarded before;
+# this guards the whole run. An overlapping call no-ops rather than queuing.
+_watcher_lock = asyncio.Lock()
+
+
 async def run_drive_watcher():
     global _prefix_cache
 
-    logger.info("[drive_watcher] ---- Starting Drive watcher cycle ----")
-    try:
-        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+    if _watcher_lock.locked():
+        logger.info("[drive_watcher] Watcher already running — skipped")
+        return {"status": "already_running"}
 
-        # Load prefix rules from store_settings once per cycle
-        _prefix_cache = _load_store_prefixes(client)
+    async with _watcher_lock:
+        logger.info("[drive_watcher] ---- Starting Drive watcher cycle ----")
+        try:
+            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
 
-        configs = client.table("drive_config").select("*").eq("enabled", True).execute()
-        logger.info(f"[drive_watcher] Found {len(configs.data)} enabled store config(s)")
-        if not configs.data:
-            return
-        service = _get_drive_service()
-        for config in configs.data:
-            try:
-                await _process_store(client, service, config)
-            except Exception as e:
-                logger.error(f"[drive_watcher] Error processing store {config.get('store_id')}: {e}")
-    except Exception as e:
-        logger.error(f"[drive_watcher] Fatal error in watcher: {e}")
-    logger.info("[drive_watcher] ---- Watcher cycle complete ----")
+            # Load prefix rules from store_settings once per cycle
+            _prefix_cache = _load_store_prefixes(client)
+
+            configs = client.table("drive_config").select("*").eq("enabled", True).execute()
+            logger.info(f"[drive_watcher] Found {len(configs.data)} enabled store config(s)")
+            if not configs.data:
+                return {"status": "completed"}
+            service = _get_drive_service()
+            for config in configs.data:
+                try:
+                    await _process_store(client, service, config)
+                except Exception as e:
+                    logger.error(f"[drive_watcher] Error processing store {config.get('store_id')}: {e}")
+        except Exception as e:
+            logger.error(f"[drive_watcher] Fatal error in watcher: {e}")
+        logger.info("[drive_watcher] ---- Watcher cycle complete ----")
+
+    return {"status": "completed"}
 
 
 async def _process_store(client, service, config: dict):
@@ -498,7 +513,7 @@ async def _process_folder(client, service, config, folder, inbox_folder_id,
 
     order_result = client.table("orders").select(
         "id, order_number, customer_name, customer_email, status, order_type, "
-        "store_id, drive_order_folder_url, border_scan, bordered_scans_drive_url"
+        "store_id, drive_order_folder_url, border_scan, bordered_scans_drive_url, account"
     ).eq("id", order_id).execute()
 
     if not order_result.data:

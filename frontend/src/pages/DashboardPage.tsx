@@ -1,13 +1,14 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ordersApi } from '../lib/api'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ordersApi, driveApi } from '../lib/api'
 import { useDashboard } from '../hooks/useDashboard'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Search, Package, Clock, CheckCircle, Inbox, ChevronRight, RefreshCw,
   AlertTriangle, Mail, Timer, TrendingUp, FilmIcon, Hourglass, Truck,
-  BookOpenCheck,
+  BookOpenCheck, Loader2,
 } from 'lucide-react'
+import clsx from 'clsx'
 import MetricCard from '../components/ui/MetricCard'
 import AlertItem from '../components/ui/AlertItem'
 import StatusPill from '../components/ui/StatusPill'
@@ -39,8 +40,28 @@ export default function DashboardPage() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('customer')
+  const [watcherToast, setWatcherToast] = useState<{ type: 'success' | 'info' | 'error', message: string } | null>(null)
 
   const { counts, needsAttention, todayActivity, performance, workload } = useDashboard()
+
+  const showWatcherToast = (type: 'success' | 'info' | 'error', message: string) => {
+    setWatcherToast({ type, message })
+    setTimeout(() => setWatcherToast(null), 5000)
+  }
+
+  const runWatcherMutation = useMutation({
+    mutationFn: () => driveApi.sync(),
+    onSuccess: (data) => {
+      if (data.status === 'already_running') {
+        showWatcherToast('info', 'Watcher is already running — try again shortly')
+      } else {
+        showWatcherToast('success', 'Watcher run complete')
+        qc.invalidateQueries({ queryKey: ['dashboard'] })
+        qc.invalidateQueries({ queryKey: ['orders-recent'] })
+      }
+    },
+    onError: () => showWatcherToast('error', 'Failed to run watcher — check the backend log'),
+  })
 
   const { data: orders = [], isLoading: ordersLoading } = useQuery({
     queryKey: ['orders-recent'],
@@ -79,6 +100,18 @@ export default function DashboardPage() {
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
 
+      {/* Toast */}
+      {watcherToast && (
+        <div className={clsx(
+          'fixed top-6 right-6 z-50 max-w-sm px-4 py-3 rounded-xl border text-sm font-medium shadow-lg',
+          watcherToast.type === 'success' && 'bg-green-500/10 border-green-500/30 text-green-400',
+          watcherToast.type === 'info' && 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400',
+          watcherToast.type === 'error' && 'bg-red-500/10 border-red-500/30 text-red-400',
+        )}>
+          {watcherToast.message}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -87,13 +120,31 @@ export default function DashboardPage() {
             {new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' })} · film lab operations overview
           </p>
         </div>
-        <button
-          onClick={() => qc.invalidateQueries({ queryKey: ['dashboard'] })}
-          className="p-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[#555] hover:text-white transition-colors"
-          title="Refresh metrics"
-        >
-          <RefreshCw size={15} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => runWatcherMutation.mutate()}
+            disabled={runWatcherMutation.isPending}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[#aaa] text-sm font-medium hover:text-white hover:border-[#3a3a3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Force a Drive watcher cycle now, instead of waiting for the 5-minute schedule"
+          >
+            {runWatcherMutation.isPending ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Running…
+              </>
+            ) : (
+              <>
+                <FilmIcon size={14} /> Run watcher now
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => qc.invalidateQueries({ queryKey: ['dashboard'] })}
+            className="p-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[#555] hover:text-white transition-colors"
+            title="Refresh metrics"
+          >
+            <RefreshCw size={15} />
+          </button>
+        </div>
       </div>
 
       {/* Search bar — Customer / Order # / Twin, navigates to Orders results */}
