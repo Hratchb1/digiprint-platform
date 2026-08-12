@@ -4,6 +4,7 @@ import { useProntoLookup } from "../hooks/useProntoLookup";
 import { ProntoOrderSummary } from "../components/ProntoOrderSummary";
 import { api } from "../lib/api";
 import { statusLabel } from "../lib/status";
+import { SERVICE_TYPES, toBackendServiceType } from "../lib/serviceTypes";
 
 const TERRITORY_STORE_MAP: Record<string, string> = {
   BOND: "a90c273e-49ff-4733-b709-31066f2ec503",
@@ -23,14 +24,6 @@ const STORE_OPTIONS = [
   { id: "ff8bdc2e-966b-4a49-80b2-af5030148095", name: "Miranda" },
   { id: "87ed3978-0d69-4acd-89f5-8e60dd121165", name: "Parramatta" },
 ];
-
-const SERVICE_TYPE_MAP: Record<string, string> = {
-  "Develop only":           "Dev only",
-  "Develop + Scan":         "Dev+Scan",
-  "Develop + Scan + Print": "Dev+Scan+Print",
-  "Scan only":              "Scan only",
-  "Print only":             "Print only",
-};
 
 function getCurrentUserInfo(): { store_id: string | null; role: string } {
   try {
@@ -429,7 +422,12 @@ export default function IntakePage() {
         const storeId = manualData.store_id || userInfo.store_id;
         if (!storeId) { setSaveError("No store selected."); setSaving(false); return; }
 
-        const backendServiceType = SERVICE_TYPE_MAP[manualData.service_type] || manualData.service_type;
+        const backendServiceType = toBackendServiceType(manualData.service_type);
+        if (!backendServiceType) {
+          setSaveError(`Unrecognised service type '${manualData.service_type}' — cannot book. Check the service-type list.`);
+          setSaving(false);
+          return;
+        }
         const rollsPayload = validTwins.map((t) => ({
           twin_check: t.twin,
           service_type: backendServiceType,
@@ -476,7 +474,12 @@ export default function IntakePage() {
         const storeId = TERRITORY_STORE_MAP[order.territory];
         if (!storeId) { setSaveError(`Unknown store territory: ${order.territory}`); return; }
 
-        const backendServiceType = SERVICE_TYPE_MAP[serviceType] || serviceType;
+        const backendServiceType = toBackendServiceType(serviceType);
+        if (!backendServiceType) {
+          setSaveError(`Unrecognised service type '${serviceType}' — cannot book. Check the service-type list.`);
+          setSaving(false);
+          return;
+        }
         const rollsPayload = validTwins.map((t) => ({
           twin_check: t.twin,
           service_type: backendServiceType,
@@ -764,7 +767,7 @@ export default function IntakePage() {
               className="w-full rounded-lg px-3 py-2 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
               style={{ backgroundColor: "#111111" }}
             >
-              {Object.keys(SERVICE_TYPE_MAP).map(s => (
+              {SERVICE_TYPES.map(s => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>

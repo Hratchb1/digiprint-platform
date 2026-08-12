@@ -1,14 +1,7 @@
 // src/components/ProntoOrderSummary.tsx
 import React from "react";
 import { ProntoOrderResult } from "../hooks/useProntoLookup";
-
-const SERVICE_TYPES = [
-  "Develop only",
-  "Develop + Scan",
-  "Develop + Scan + Print",
-  "Scan only",
-  "Print only",
-];
+import { SERVICE_TYPES } from "../lib/serviceTypes";
 
 interface Props {
   order: ProntoOrderResult;
