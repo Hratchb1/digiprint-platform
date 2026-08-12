@@ -461,6 +461,12 @@ def send_order_email(
         msg["Subject"] = subject
         msg["From"]    = f"digiDirect {store_name} Lab <{gmail_address}>"
         msg["To"]      = customer_email
+        # Route replies to the store's public inbox regardless of which
+        # Gmail account authenticated the send — e.g. Bondi currently
+        # sends from a personal address, so without this, customer replies
+        # would land there instead of the store's real inbox.
+        if store_reply_email:
+            msg["Reply-To"] = store_reply_email
         msg.attach(MIMEText(html_body, "html"))
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
