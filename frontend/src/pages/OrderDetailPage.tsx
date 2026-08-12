@@ -166,6 +166,15 @@ export default function OrderDetailPage() {
   const isDiscarded = order.status === 'discarded'
   const canDiscard = ACTIVE_STATUSES.includes(order.status)
 
+  // All-blank orders send the blank_notification template, not a delivery
+  // email — the generic "Resend Email" label was misleading staff about
+  // what the button actually does. blank_email_status (not email_status)
+  // is what tracks whether that send has gone out.
+  const isAllBlank = (order.rolls?.length ?? 0) > 0 && order.rolls.every((r: any) => r.is_blank)
+  const resendButtonLabel = isAllBlank
+    ? (order.blank_email_status ? 'Resend blank notification' : 'Send blank notification')
+    : 'Resend Email'
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
 
@@ -582,7 +591,7 @@ export default function OrderDetailPage() {
               >
                 <span className="flex items-center gap-2">
                   <Mail size={13} />
-                  {resendEmailMutation.isPending ? 'Resending…' : 'Resend Email'}
+                  {resendEmailMutation.isPending ? 'Resending…' : resendButtonLabel}
                 </span>
                 <ChevronDown size={14} className="rotate-[-90deg]" />
               </button>
@@ -596,7 +605,7 @@ export default function OrderDetailPage() {
               >
                 <span className="flex items-center gap-2">
                   <Mail size={13} />
-                  {resendEmailMutation.isPending ? 'Resending…' : 'Resend Email'}
+                  {resendEmailMutation.isPending ? 'Resending…' : resendButtonLabel}
                 </span>
                 <ChevronDown size={14} className="rotate-[-90deg]" />
               </button>

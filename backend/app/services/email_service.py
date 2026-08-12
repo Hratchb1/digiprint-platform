@@ -624,12 +624,25 @@ async def send_manual_email(
     except Exception as e:
         logger.warning(f"[send_manual_email] Could not write to email_log: {e}")
 
-    # Update order email_status on success
+    # Update the status column matching this send's template on success.
+    # Previously this always wrote email_status regardless of template_key,
+    # so a blank or print-ready send lit up the "Delivery" row and left
+    # "Blank notice" / "Print ready" permanently "Not sent" in the UI even
+    # though the email had gone out.
     if success:
+        if template_key == "blank_notification":
+            status_column = "blank_email_status"
+        elif template_key == "prints_ready":
+            status_column = "print_ready_email_status"
+        else:
+            # scans_ready, prints_and_scans_ready, negatives_ready — and any
+            # future delivery-shaped template — all count as the delivery send.
+            status_column = "email_status"
+
         try:
-            sb.table("orders").update({"email_status": "sent"}).eq("id", order_id).execute()
+            sb.table("orders").update({status_column: "sent"}).eq("id", order_id).execute()
         except Exception as e:
-            logger.warning(f"[send_manual_email] Could not update email_status: {e}")
+            logger.warning(f"[send_manual_email] Could not update {status_column}: {e}")
 
         # Advance status to delivered on any successful manual send (Dev only /
         # Print only / blank notification / negatives-ready flows that don't go
