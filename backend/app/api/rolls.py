@@ -4,7 +4,7 @@ from sqlalchemy import select, and_
 from uuid import UUID
 
 from app.core.database import get_db
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, assert_can_access
 from app.core.timeutils import utcnow
 from app.models.orm import Roll, RollAuditLog, OrderEvent, Order
 from app.models.schemas import TwinCheckUpdate
@@ -31,6 +31,9 @@ async def update_twin_check(
     roll = result.scalar_one_or_none()
     if not roll:
         raise HTTPException(status_code=404, detail="Roll not found")
+    # assert_can_access only reads .store_id off the object passed in, so
+    # the Roll (which carries store_id directly) works the same as an Order.
+    assert_can_access(roll, current_user)
 
     old_twin = roll.twin_check
 

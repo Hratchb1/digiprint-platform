@@ -6,7 +6,7 @@ from uuid import UUID
 import asyncio
 
 from app.core.database import get_db
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, effective_store_id, assert_can_access
 from app.core.timeutils import utcnow
 from app.models.schemas import (
     OrderCreate, OrderRead, OrderSummary, OrderStatusUpdate,
@@ -59,14 +59,20 @@ async def list_orders(
     offset: int = Query(0),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    store_scope: Optional[UUID] = Depends(effective_store_id),
 ):
     """List orders. Store staff are limited to their own store.
 
     Defaults to active statuses (inbound, booked_in, scanning, delivered).
     An explicit ?status= list overrides the default and include_terminal.
+
+    Store scoping: non-admins always get store_scope (derived from their
+    token) — any client-supplied ?store_id= is ignored, it cannot be used
+    to widen access. master_admin has store_scope=None (all stores) and
+    may optionally pass ?store_id= to filter to a single store.
     """
-    if current_user.get("role") != "master_admin" and not store_id:
-        store_id = UUID(current_user["store_id"]) if current_user.get("store_id") else None
+    if store_scope is not None:
+        store_id = store_scope
 
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
@@ -94,8 +100,15 @@ async def check_twin(
     twin_check: str = Query(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    store_scope: Optional[UUID] = Depends(effective_store_id),
 ):
-    """Check if a twin check number already exists in this store."""
+    """Check if a twin check number already exists in this store.
+
+    Non-admins: the token's store always wins over the client-supplied
+    ?store_id=, so a store login can't probe another store's twin space.
+    """
+    if store_scope is not None:
+        store_id = store_scope
     padded = twin_check.strip().zfill(4)
     exists = await order_service.check_twin_exists(db, store_id, padded)
     return {"exists": exists, "twin_check": padded}
@@ -107,8 +120,11 @@ async def check_order_number(
     store_id: UUID = Query(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    store_scope: Optional[UUID] = Depends(effective_store_id),
 ):
     """Check if an order number already exists at a store."""
+    if store_scope is not None:
+        store_id = store_scope
     existing = await order_service.get_order_by_number(db, order_number.strip(), store_id)
     if not existing:
         return {"exists": False}
@@ -125,6 +141,7 @@ async def get_order(
     order = await order_service.get_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(order, current_user)
     return _enrich(order)
 
 
@@ -135,6 +152,10 @@ async def update_status(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    existing = await order_service.get_order(db, order_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(existing, current_user)
     try:
         order = await order_service.update_order_status(
             db, order_id, payload, actor_label=_actor(current_user)
@@ -152,6 +173,10 @@ async def set_drive_link(
     current_user: dict = Depends(get_current_user),
 ):
     """Set the Google Drive folder URL for a delivered order."""
+    existing = await order_service.get_order(db, order_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(existing, current_user)
     try:
         order = await order_service.set_drive_link(
             db, order_id, payload.drive_order_folder_url, actor_label=_actor(current_user)
@@ -169,6 +194,10 @@ async def mark_blank(
     current_user: dict = Depends(get_current_user),
 ):
     """Mark specific rolls as blank."""
+    existing = await order_service.get_order(db, order_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(existing, current_user)
     try:
         order = await order_service.mark_blanks(
             db, order_id, payload.roll_ids, actor_label=_actor(current_user)
@@ -189,6 +218,7 @@ async def add_rolls_to_order(
     order = await order_service.get_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(order, current_user)
 
     existing_twins = await order_service._get_existing_twins(db, order.store_id)
     new_twins = [r.twin_check for r in payload.rolls]
@@ -240,6 +270,11 @@ async def reset_twin_checks(
     if role not in ("master_admin", "store_admin"):
         raise HTTPException(status_code=403, detail="Admin access required to reset twin checks")
 
+    existing = await order_service.get_order(db, order_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(existing, current_user)
+
     try:
         order = await order_service.reset_twin_checks(
             db, order_id, actor_label=_actor(current_user)
@@ -259,6 +294,7 @@ async def retry_border_processing(
     order = await order_service.get_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(order, current_user)
 
     if not order.border_scan:
         raise HTTPException(status_code=400, detail="Order does not have border scan enabled")
@@ -338,6 +374,11 @@ async def get_events(
 ):
     """Full audit trail for an order."""
     from app.models.orm import OrderEvent
+    order = await order_service.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(order, current_user)
+
     result = await db.execute(
         select(OrderEvent)
         .where(OrderEvent.order_id == order_id)
@@ -372,6 +413,7 @@ async def discard_order(
     order = await order_service.get_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    assert_can_access(order, current_user)
 
     if order.status not in DISCARDABLE_STATUSES:
         raise HTTPException(

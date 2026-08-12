@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
-import bcrypt
 
 from app.core.database import get_db
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
@@ -15,11 +14,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
-    print(f"DEBUG: email={payload.email} user_found={user is not None}")
-    if user:
-        print(f"DEBUG: hash={user.password_hash[:20]}")
-        check = bcrypt.checkpw(payload.password.encode('utf-8'), user.password_hash.encode('utf-8'))
-        print(f"DEBUG: password_check={check}")
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
