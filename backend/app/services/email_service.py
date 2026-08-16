@@ -334,8 +334,6 @@ def send_order_email(
 
     # --- Store settings (storage policy + review URL + email branding) ---
     store_settings = _get_store_settings(store_id) if store_id else {}
-    print_days        = store_settings.get("print_storage_days", 30)
-    negative_days     = store_settings.get("negative_storage_days", 14)
     drive_days        = store_settings.get("drive_storage_days", 90)
     google_review_url = store_settings.get("google_review_url")
 
@@ -346,9 +344,24 @@ def send_order_email(
     store_instagram_url = store_settings.get("instagram_url")
 
     # --- Expiry dates ---
+    # Collection window is fixed by business rule per template, not read from
+    # store_settings.print_storage_days/negative_storage_days — those columns
+    # exist but aren't editable from any admin UI, and negative_storage_days
+    # currently holds a stale 30-day value in every store row that doesn't
+    # match the rule below, so they're intentionally not used here:
+    #   Dev only / Dev+Scan   (no physical prints)      — negatives: 2 weeks
+    #   Dev+Print / Dev+Scan+Print (prints picked up
+    #     with negatives in the same visit)             — both: 30 days
+    # Gated on template_key rather than the order's has_prints/service_type
+    # flag — service_type is only reliably "Dev+Scan+Print"-shaped for manual
+    # sends; auto-sends from the Drive watcher shim it from the coarse
+    # order_type ("film"/"b2b"/...), which never contains "print", so it
+    # can't be trusted here.
+    prints_and_negatives_packaged = template_key in ("prints_ready", "prints_and_scans_ready")
+
     drive_expiry    = _expiry_str(base_date, drive_days)
-    print_expiry    = _expiry_str(base_date, print_days)
-    negative_expiry = _expiry_str(base_date, negative_days)
+    negative_expiry = _expiry_str(base_date, 30 if prints_and_negatives_packaged else 14)
+    print_expiry    = _expiry_str(base_date, 30)  # only rendered by prints_ready / prints_and_scans_ready — both always packaged
 
     # --- Service flags ---
     service_type = (order.get("service_type") or "").lower()
@@ -410,6 +423,7 @@ def send_order_email(
             drive_expiry=drive_expiry,
             print_expiry=print_expiry,
             negative_expiry=negative_expiry,
+            prints_and_negatives_packaged=prints_and_negatives_packaged,
             # Promotions
             promotions=promotions,
             # Cross-sell

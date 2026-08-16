@@ -66,13 +66,17 @@
           <td width="34" valign="middle" style="padding-right:12px;"><img src="{{ base_url }}StorageIcon_Negatives.png" width="28" height="28" alt="Negatives" style="display:block;" /></td>
           <td valign="middle">
             <div style="font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;color:#17140F;">Negatives</div>
-            <div style="font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:12px;color:#6B6558;">Ready to collect · {{ store_name }}</div>
+            <div style="font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:12px;color:#6B6558;">Available in store</div>
           </td>
           <td valign="middle" align="right" style="font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:12px;color:#999999;white-space:nowrap;">{{ negative_expiry }}</td>
         </tr></table>
       </td></tr>
     </table>
+    {% if prints_and_negatives_packaged %}
+    <p style="margin:10px 0 0 0;font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:11px;font-style:italic;color:#999999;">⚠️ Please collect your prints and negatives within 30 days. We cannot guarantee availability after this date.</p>
+    {% else %}
     <p style="margin:10px 0 0 0;font-family:Aeonik,Helvetica,Arial,sans-serif;font-size:11px;font-style:italic;color:#999999;">⚠️ Please collect your negatives within 2 weeks. We cannot guarantee your negatives will be available after this date.</p>
+    {% endif %}
   </td></tr>
 
   <!-- No rotating banner, no current offer for negatives-only customers -->
@@ -104,7 +108,7 @@
       <td class="tile-cell" width="33%" valign="top" style="padding:0 0 0 4px;">
         <a href="https://digidirect.com.au/print" style="display:block;text-decoration:none;border-top:3px solid #FF5A1F;background-color:#EDE6D8;border-radius:4px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td>
-            <img src="{{ base_url }}CrossSellTile_PhotoPrint_760x480.png" width="176" alt="Photo Prints" style="display:block;width:100%;height:auto;" />
+            <img src="{{ base_url }}CrossSellTile_PhotoPrints_760x480.png" width="176" alt="Photo Prints" style="display:block;width:100%;height:auto;" />
           </td></tr><tr><td style="background-color:#17140F;background-image:linear-gradient(180deg,rgba(23,20,15,0) 0%,rgba(23,20,15,.9) 100%);padding:10px 10px;">
             <div style="font-family:Aeonik,Helvetica,Arial,sans-serif;color:#ffffff;font-size:12px;font-weight:700;">Photo Prints</div>
             <div style="font-family:Aeonik,Helvetica,Arial,sans-serif;color:#FF5A1F;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">Print Online →</div>
