@@ -100,6 +100,73 @@ export const rollsApi = {
     api.patch(`/rolls/${rollId}/twin-check`, { twin_check }).then(r => r.data),
 }
 
+// ── Twin checks (RollCall auto-allocation) ──────────────────────────────────
+export interface TwinCheckRead {
+  id: string
+  store_id: string
+  number: number
+  twin_check: string          // zero-padded 4-digit display form
+  cycle: number | null
+  source: 'auto' | 'manual'
+  order_id: string | null
+  roll_id: string | null
+  status: 'allocated' | 'printed' | 'voided'
+  collision_warning: boolean
+  allocated_at: string
+  allocated_by: string | null
+  printed_at: string | null
+  voided_at: string | null
+  void_reason: string | null
+}
+
+export interface AllocateResponse {
+  order_id: string
+  twin_checks: TwinCheckRead[]
+  range_label: string | null
+}
+
+export const twinChecksApi = {
+  allocate: (orderId: string): Promise<AllocateResponse> =>
+    api.post(`/orders/${orderId}/twin-checks/allocate`).then(r => r.data),
+
+  print: (orderId: string): Promise<{ print_job_id: string; status: string }> =>
+    api.post(`/orders/${orderId}/twin-checks/print`).then(r => r.data),
+
+  addRoll: (orderId: string, service_type: string, process_code?: string | null): Promise<AllocateResponse> =>
+    api.post(`/orders/${orderId}/twin-checks/add-roll`, { service_type, process_code }).then(r => r.data),
+
+  reprint: (twinCheckId: string): Promise<{ print_job_id: string; status: string }> =>
+    api.post(`/twin-checks/${twinCheckId}/reprint`).then(r => r.data),
+
+  void: (twinCheckId: string, reason: string): Promise<TwinCheckRead> =>
+    api.post(`/twin-checks/${twinCheckId}/void`, { reason }).then(r => r.data),
+
+  rescan: (orderId: string, roll_ids: string[]): Promise<AllocateResponse> =>
+    api.post(`/orders/${orderId}/rescan`, { roll_ids }).then(r => r.data),
+}
+
+// ── Twin check sequences (admin) ────────────────────────────────────────────
+export interface TwinCheckSequence {
+  store_id: string
+  current_value: number
+  cycle: number
+  min_value: number
+  max_value: number
+  auto_enabled: boolean
+  updated_at: string
+}
+
+export const twinCheckSequencesApi = {
+  list: (): Promise<TwinCheckSequence[]> =>
+    api.get('/twin-check-sequences').then(r => r.data),
+  update: (storeId: string, auto_enabled: boolean): Promise<TwinCheckSequence> =>
+    api.patch(`/twin-check-sequences/${storeId}`, { auto_enabled }).then(r => r.data),
+  // Non-admin — any authenticated user can check their own store's mode.
+  // Used by IntakePage to decide which twin-check UI to render.
+  getMode: (storeId: string): Promise<{ store_id: string; auto_enabled: boolean }> =>
+    api.get(`/twin-check-sequences/${storeId}/mode`).then(r => r.data),
+}
+
 // ── Emails ────────────────────────────────────────────────────────────────
 export const emailsApi = {
   send: (orderId: string, payload: object = {}) =>

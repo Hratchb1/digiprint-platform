@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage'
 import OrdersPage from './pages/OrdersPage'
 import OrderDetailPage from './pages/OrderDetailPage'
 import IntakePage from './pages/IntakePage'
+import TwinCheckAdminPage from './pages/TwinCheckAdminPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="orders" element={<OrdersPage />} />
               <Route path="orders/:id" element={<OrderDetailPage />} />
               <Route path="intake" element={<IntakePage />} />
+              <Route path="admin/twin-checks" element={<TwinCheckAdminPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

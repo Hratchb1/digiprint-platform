@@ -2,7 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useProntoLookup } from "../hooks/useProntoLookup";
 import { ProntoOrderSummary } from "../components/ProntoOrderSummary";
-import { api } from "../lib/api";
+import { api, twinChecksApi, twinCheckSequencesApi } from "../lib/api";
 import { statusLabel } from "../lib/status";
 import { SERVICE_TYPES, toBackendServiceType } from "../lib/serviceTypes";
 
@@ -25,6 +25,10 @@ const STORE_OPTIONS = [
   { id: "87ed3978-0d69-4acd-89f5-8e60dd121165", name: "Parramatta" },
 ];
 
+// Permitted twin check label process codes — no E6 (not offered), see
+// backend/migrations/009_twin_check_allocation.sql.
+const PROCESS_CODES = ["C41", "BW", "RSC"];
+
 function getCurrentUserInfo(): { store_id: string | null; role: string } {
   try {
     const token = localStorage.getItem("token");
@@ -43,6 +47,11 @@ interface TwinEntry {
   twin: string;
   status: "ok" | "duplicate";
   message?: string;
+  // Auto-mode only (RollCall twin check allocation) — a twin check is one
+  // concept regardless of provenance, so these are purely display metadata
+  // layered onto the same pill, not a different kind of entry.
+  collisionWarning?: boolean;
+  source?: "auto" | "manual";
 }
 
 interface ExistingOrderInfo {
@@ -174,6 +183,32 @@ export default function IntakePage() {
   const [lastTwin, setLastTwin] = useState("");
   const [rangeError, setRangeError] = useState<string | null>(null);
 
+  // ── Auto mode (RollCall twin check allocation) ──────────────────────
+  // auto_enabled is a per-store toggle (admin-controlled) — it decides
+  // whether numbers arrive pre-filled by the system or typed by staff. The
+  // twin-check section itself is never hidden in either mode; only the
+  // *input* mechanism differs. See backend/migrations/009_twin_check_allocation.sql.
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [autoModeChecked, setAutoModeChecked] = useState(false);
+  const [rollCount, setRollCount] = useState<number>(0);
+  const [processMix, setProcessMix] = useState<{ process_code: string | null; count: number }[]>([]);
+  const [manualProcessCode, setManualProcessCode] = useState<string>("");
+  const [allocating, setAllocating] = useState(false);
+  const [allocateError, setAllocateError] = useState<string | null>(null);
+  const [allocatedOrderId, setAllocatedOrderId] = useState<string | null>(null);
+  const [allocatedRangeLabel, setAllocatedRangeLabel] = useState<string | null>(null);
+  // Set as soon as order creation succeeds, cleared once allocation also
+  // succeeds. If allocate() fails after order creation succeeded, this
+  // stays set so a retry calls allocate directly on the SAME order instead
+  // of re-running order creation — POST /orders has no dup-guard for an
+  // order that's already booked_in (only for status='inbound'), so retrying
+  // the whole flow would silently create a second order and orphan the
+  // first one with pending rolls and no numbers.
+  const [pendingOrder, setPendingOrder] = useState<{ id: string; orderNum: string; customerName: string } | null>(null);
+  const [printing, setPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const [printedOnce, setPrintedOnce] = useState(false);
+
   // Re-entrancy guard for addTwins — see the comment on addTwins below.
   const addingTwinsRef = useRef(false);
 
@@ -219,6 +254,37 @@ export default function IntakePage() {
       }
     }
   }, [order]);
+
+  // Resolve which store this booking is against, whatever step/mode we're in.
+  const resolveStoreId = useCallback((): string | undefined => {
+    if (isManualEntry) return manualData.store_id || undefined;
+    if (order?.territory) return TERRITORY_STORE_MAP[order.territory];
+    return userInfo.store_id || undefined;
+  }, [isManualEntry, manualData.store_id, order, userInfo.store_id]);
+
+  // Check auto_enabled for the resolved store as soon as the twins step is
+  // reached — decides which twin-check input UI renders below.
+  useEffect(() => {
+    if (step !== "twins") return;
+    const storeId = resolveStoreId();
+    if (!storeId) { setAutoEnabled(false); setAutoModeChecked(true); return; }
+    setAutoModeChecked(false);
+    twinCheckSequencesApi.getMode(storeId)
+      .then(({ auto_enabled }) => setAutoEnabled(auto_enabled))
+      .catch(() => setAutoEnabled(false))
+      .finally(() => setAutoModeChecked(true));
+  }, [step, resolveStoreId]);
+
+  // Pre-fill roll count / process mix from the Pronto SKU-derived mix
+  // (§3.4/§3.5b) — manual entries have no SKU data, so this is skipped and
+  // staff fill both in directly.
+  useEffect(() => {
+    if (step !== "twins" || isManualEntry) return;
+    if (order?.process_mix) {
+      setRollCount(order.process_mix.total);
+      setProcessMix(order.process_mix.mix);
+    }
+  }, [step, isManualEntry, order]);
 
   const handleOperatorSubmit = () => {
     const val = operatorInput.trim().toUpperCase();
@@ -288,6 +354,20 @@ export default function IntakePage() {
     setStep("twins");
   };
 
+  const resetAutoModeState = () => {
+    setRollCount(0);
+    setProcessMix([]);
+    setManualProcessCode("");
+    setAllocating(false);
+    setAllocateError(null);
+    setAllocatedOrderId(null);
+    setAllocatedRangeLabel(null);
+    setPendingOrder(null);
+    setPrinting(false);
+    setPrintError(null);
+    setPrintedOnce(false);
+  };
+
   const handleClear = () => {
     clear();
     setOrderInput("");
@@ -312,6 +392,7 @@ export default function IntakePage() {
       store_id: userInfo.store_id || "",
     });
     setManualErrors({});
+    resetAutoModeState();
     setStep("lookup");
   };
 
@@ -344,6 +425,7 @@ export default function IntakePage() {
       store_id: userInfo.store_id || "",
     });
     setManualErrors({});
+    resetAutoModeState();
     setStep("lookup");
   };
 
@@ -381,6 +463,7 @@ export default function IntakePage() {
         twin,
         status: storeDups.includes(twin) ? "duplicate" : "ok",
         message: storeDups.includes(twin) ? "Already in use at this store" : undefined,
+        source: "manual",
       }));
       setTwins((prev) => [...prev, ...entries]);
     } finally {
@@ -528,6 +611,159 @@ export default function IntakePage() {
     }
   }, [order, twins, serviceType, operatorInitials, dupAction, existingOrder, isManualEntry, manualData, orderInput, userInfo.store_id]);
 
+  // ── Auto mode — book the order with pending rolls, then allocate ─────
+  const handleAutoBook = useCallback(async () => {
+    setAllocating(true);
+    setAllocateError(null);
+
+    try {
+      let orderId: string;
+      let orderNum: string;
+      let customerName: string;
+
+      if (pendingOrder) {
+        // Retry after a prior allocate() failure — the order already
+        // exists (this same click would otherwise create a SECOND order,
+        // since POST /orders has no dup-guard for an already-booked_in
+        // order). Skip straight to allocate on the order we already have.
+        ({ id: orderId, orderNum, customerName } = pendingOrder);
+      } else {
+        if (rollCount < 1) { setAllocateError("Enter how many rolls this order needs."); setAllocating(false); return; }
+
+        // Expand the process mix into one process_code per roll, in mix
+        // order — "auto-assign in SKU order" (§3.5b). A staff-edited total
+        // that no longer matches the mix is padded/trimmed rather than
+        // silently dropping rolls or losing the edit.
+        let codes: (string | null)[] = [];
+        if (processMix.length > 0) {
+          for (const entry of processMix) codes.push(...Array(entry.count).fill(entry.process_code));
+          if (codes.length < rollCount) {
+            const fill = codes.length > 0 ? codes[codes.length - 1] : (manualProcessCode || null);
+            codes = [...codes, ...Array(rollCount - codes.length).fill(fill)];
+          } else if (codes.length > rollCount) {
+            codes = codes.slice(0, rollCount);
+          }
+        } else {
+          codes = Array(rollCount).fill(manualProcessCode || null);
+        }
+
+        if (codes.some((c) => !c)) {
+          setAllocateError("Select a process (C41 / BW / RSC) for every roll before booking — never defaults automatically.");
+          setAllocating(false);
+          return;
+        }
+
+        const backendServiceType = isManualEntry
+          ? toBackendServiceType(manualData.service_type)
+          : toBackendServiceType(serviceType);
+        if (!backendServiceType) {
+          setAllocateError("Unrecognised service type — cannot book. Check the service-type list.");
+          setAllocating(false);
+          return;
+        }
+
+        // No twin_check on any of these — pending rolls, filled in by
+        // allocate right after creation (see twin_check_service.allocate_for_order).
+        const rollsPayload = codes.map((process_code) => ({
+          service_type: backendServiceType,
+          process_code,
+        }));
+
+        if (dupAction === "add" && existingOrder) {
+          await api.post(`/orders/${existingOrder.id}/add-rolls`, {
+            rolls: rollsPayload,
+            operator_initials: operatorInitials || null,
+          });
+          orderId = existingOrder.id;
+          orderNum = orderInput.trim();
+          customerName = isManualEntry ? manualData.customer_name : (order?.customer_name || "");
+        } else if (isManualEntry) {
+          const storeId = manualData.store_id || userInfo.store_id;
+          if (!storeId) { setAllocateError("No store selected."); setAllocating(false); return; }
+          const orderNumber = dupAction === "new" ? `${orderInput.trim()}-B` : orderInput.trim();
+          const { data } = await api.post("/orders", {
+            order_number:      orderNumber,
+            store_id:          storeId,
+            customer_name:     manualData.customer_name,
+            customer_email:    manualData.customer_email || null,
+            customer_phone:    manualData.customer_phone || null,
+            account:           manualData.account || null,
+            operator_initials: operatorInitials || null,
+            manual_entry:      true,
+            rolls:             rollsPayload,
+          });
+          orderId = data.id;
+          orderNum = orderNumber;
+          customerName = manualData.customer_name;
+        } else {
+          if (!order) { setAllocating(false); return; }
+          const storeId = TERRITORY_STORE_MAP[order.territory];
+          if (!storeId) { setAllocateError(`Unknown store territory: ${order.territory}`); setAllocating(false); return; }
+          const orderNumber = dupAction === "new" ? `${order.sales_order_number}-B` : order.sales_order_number;
+          const { data } = await api.post("/orders", {
+            order_number:      orderNumber,
+            store_id:          storeId,
+            customer_name:     order.customer_name,
+            customer_email:    order.email_address || null,
+            account:           order.pronto_account || null,
+            operator_initials: operatorInitials || null,
+            manual_entry:      false,
+            rolls:             rollsPayload,
+          });
+          orderId = data.id;
+          orderNum = orderNumber;
+          customerName = order.customer_name;
+        }
+
+        // Order now exists server-side — record it BEFORE attempting
+        // allocate, so a failure below leaves us able to retry allocate
+        // alone rather than re-entering this branch and creating another one.
+        setPendingOrder({ id: orderId, orderNum, customerName });
+      }
+
+      const allocation = await twinChecksApi.allocate(orderId);
+      setTwins(
+        allocation.twin_checks.map((tc) => ({
+          twin: tc.twin_check,
+          status: "ok",
+          collisionWarning: tc.collision_warning,
+          source: tc.source,
+        }))
+      );
+      setPendingOrder(null);
+      setAllocatedOrderId(orderId);
+      setAllocatedRangeLabel(allocation.range_label);
+      setPrintedOnce(false);
+      logBooking({
+        orderNum,
+        customerName,
+        rollCount: allocation.twin_checks.length,
+        action: dupAction === "add" ? "added" : "new",
+        manual: isManualEntry,
+      });
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      setAllocateError(typeof detail === "string" ? detail : JSON.stringify(detail) || "Failed to book order.");
+    } finally {
+      setAllocating(false);
+    }
+  }, [pendingOrder, rollCount, processMix, manualProcessCode, isManualEntry, manualData, serviceType, order, dupAction, existingOrder, operatorInitials, orderInput, userInfo.store_id]);
+
+  const handlePrintLabels = useCallback(async () => {
+    if (!allocatedOrderId) return;
+    setPrinting(true);
+    setPrintError(null);
+    try {
+      await twinChecksApi.print(allocatedOrderId);
+      setPrintedOnce(true);
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      setPrintError(typeof detail === "string" ? detail : "Failed to send labels to the printer.");
+    } finally {
+      setPrinting(false);
+    }
+  }, [allocatedOrderId]);
+
   const removeTwin = (twin: string) => setTwins((prev) => prev.filter((t) => t.twin !== twin));
 
   const validTwinCount = twins.filter((t) => t.status === "ok").length;
@@ -538,6 +774,12 @@ export default function IntakePage() {
     parseInt(lastTwin) >= parseInt(firstTwin)
       ? parseInt(lastTwin) - parseInt(firstTwin) + 1
       : null;
+
+  // Auto-mode pills are already persisted (order + rolls + twin_checks all
+  // exist server-side by the time they render) — removing one here is a
+  // false "undo" that the backend doesn't know about. Void (on the order
+  // detail page, after booking) is the real undo for an allocated number.
+  const twinsAreEditable = !(autoEnabled && allocatedOrderId);
 
   // ── Operator prompt ───────────────────────────────────────
   if (step === "operator") {
@@ -822,92 +1064,195 @@ export default function IntakePage() {
         </div>
       )}
 
-      {/* Twin entry */}
-      {step === "twins" && !showDupModal && (
+      {/* Twin entry — the section itself is always shown once we reach this
+          step, in both auto and manual mode; only the input mechanism below
+          differs (see auto/manual blocks). */}
+      {step === "twins" && !showDupModal && autoModeChecked && (
         <div className="space-y-4">
-          <div className="flex rounded-lg overflow-hidden border border-[#2a2a2a]">
-            <button
-              onClick={() => { setTwinMode("single"); setSingleError(null); }}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "single" ? "text-white" : "text-gray-400"}`}
-              style={{ backgroundColor: twinMode === "single" ? "#2a2a2a" : "#111111" }}
-            >
-              Twin checks
-            </button>
-            <button
-              onClick={() => { setTwinMode("range"); setRangeError(null); }}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "range" ? "text-white" : "text-gray-400"}`}
-              style={{ backgroundColor: twinMode === "range" ? "#2a2a2a" : "#111111" }}
-            >
-              Range
-            </button>
-          </div>
 
-          {twinMode === "single" && (
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-300">
-                Twin check
-                <span className="ml-2 text-gray-500 font-normal text-xs">4 digits (e.g. 0042) or dash range (e.g. 0042-0051)</span>
-              </label>
-              <div className="flex gap-2">
+          {/* Auto mode — mode indicator */}
+          {autoEnabled && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-500/20" style={{ backgroundColor: "#0a1420" }}>
+              <span className="text-blue-400 text-sm">⚡</span>
+              <p className="text-blue-400 text-xs font-semibold uppercase tracking-wide">Auto mode — twin checks assigned automatically</p>
+            </div>
+          )}
+
+          {/* Auto mode — pre-allocation: roll count + process mix confirmation */}
+          {autoEnabled && !allocatedOrderId && (
+            <div className="rounded-xl border border-[#2a2a2a] p-4 space-y-3" style={{ backgroundColor: "#111111" }}>
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-400">Rolls needing a twin check</label>
                 <input
-                  ref={singleTwinRef}
-                  type="text"
-                  value={singleInput}
-                  onChange={(e) => { setSingleInput(e.target.value); setSingleError(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && handleSingleSubmit()}
-                  placeholder="e.g. 0042 or 0042-0051"
-                  maxLength={9}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
-                  style={{ backgroundColor: "#111111" }}
+                  type="number"
+                  min={1}
+                  value={rollCount || ""}
+                  onChange={(e) => setRollCount(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="w-24 rounded-lg px-3 py-2 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                  style={{ backgroundColor: "#0f0f0f" }}
                 />
-                <button onClick={handleSingleSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40" style={{ backgroundColor: "#2a2a2a" }}>Add</button>
               </div>
-              {singleError && <p className="text-sm text-red-400">{singleError}</p>}
-              {twins.length > 0 && !singleInput && (
-                <p className="text-xs text-gray-500">Press Enter on empty field to book {validTwinCount} roll{validTwinCount !== 1 ? "s" : ""}</p>
+
+              {/* Single-process orders need no extra UI (§3.5b) — mixed
+                  orders show an editable per-code breakdown. */}
+              {processMix.length > 1 ? (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-gray-400">Process mix</p>
+                  {processMix.map((entry, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs text-gray-300 font-mono w-10">{entry.process_code || "?"}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={entry.count}
+                        onChange={(e) => {
+                          const next = [...processMix];
+                          next[i] = { ...entry, count: Math.max(0, parseInt(e.target.value, 10) || 0) };
+                          setProcessMix(next);
+                        }}
+                        className="w-20 rounded-lg px-2 py-1 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                        style={{ backgroundColor: "#0f0f0f" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : processMix.length === 1 && processMix[0].process_code ? (
+                <p className="text-xs text-gray-500">
+                  All {rollCount} roll{rollCount !== 1 ? "s" : ""}: <span className="text-gray-300 font-mono">{processMix[0].process_code}</span>
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-400">Process</label>
+                  <select
+                    value={manualProcessCode}
+                    onChange={(e) => setManualProcessCode(e.target.value)}
+                    className="w-32 rounded-lg px-3 py-2 text-sm text-white border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600]"
+                    style={{ backgroundColor: "#0f0f0f" }}
+                  >
+                    <option value="">Select…</option>
+                    {PROCESS_CODES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {allocateError && <p className="text-sm text-red-400">{allocateError}</p>}
+
+              <button
+                onClick={handleAutoBook}
+                disabled={allocating || (!pendingOrder && rollCount < 1)}
+                className="w-full py-3 rounded-lg font-semibold text-white disabled:opacity-40"
+                style={{ backgroundColor: "#ff6600" }}
+              >
+                {allocating
+                  ? "Allocating…"
+                  : pendingOrder
+                    // Order already exists from a failed prior attempt — this
+                    // retries allocation on the SAME order, never creates a new one.
+                    ? `Retry allocation for #${pendingOrder.orderNum}`
+                    : `${dupAction === "add" ? "Add" : "Book"} ${rollCount || 0} roll${rollCount !== 1 ? "s" : ""} — twin checks assigned automatically`}
+              </button>
+              {pendingOrder && (
+                <p className="text-xs text-amber-400">
+                  Order #{pendingOrder.orderNum} was created but twin checks weren't allocated yet — retry above, don't re-enter the roll count.
+                </p>
               )}
             </div>
           )}
 
-          {twinMode === "range" && (
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-300">
-                Twin check range
-                <span className="ml-2 text-gray-500 font-normal text-xs">Both must be exactly 4 digits</span>
-              </label>
-              <div className="flex gap-2 items-center">
-                <input
-                  ref={firstTwinRef}
-                  type="text"
-                  value={firstTwin}
-                  onChange={(e) => { setFirstTwin(e.target.value); setRangeError(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && lastTwinRef.current?.focus()}
-                  placeholder="First (e.g. 0042)"
-                  maxLength={4}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
-                  style={{ backgroundColor: "#111111" }}
-                />
-                <span className="text-gray-500 text-sm px-1">→</span>
-                <input
-                  ref={lastTwinRef}
-                  type="text"
-                  value={lastTwin}
-                  onChange={(e) => { setLastTwin(e.target.value); setRangeError(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && handleRangeSubmit()}
-                  placeholder="Last (e.g. 0051)"
-                  maxLength={4}
-                  className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
-                  style={{ backgroundColor: "#111111" }}
-                />
-                <button onClick={handleRangeSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40 whitespace-nowrap" style={{ backgroundColor: "#2a2a2a" }}>Add range</button>
+          {/* Manual mode — unchanged from before auto mode existed */}
+          {!autoEnabled && (
+            <>
+              <div className="flex rounded-lg overflow-hidden border border-[#2a2a2a]">
+                <button
+                  onClick={() => { setTwinMode("single"); setSingleError(null); }}
+                  className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "single" ? "text-white" : "text-gray-400"}`}
+                  style={{ backgroundColor: twinMode === "single" ? "#2a2a2a" : "#111111" }}
+                >
+                  Twin checks
+                </button>
+                <button
+                  onClick={() => { setTwinMode("range"); setRangeError(null); }}
+                  className={`flex-1 py-2 text-sm font-medium transition-colors ${twinMode === "range" ? "text-white" : "text-gray-400"}`}
+                  style={{ backgroundColor: twinMode === "range" ? "#2a2a2a" : "#111111" }}
+                >
+                  Range
+                </button>
               </div>
-              {rangeError && <p className="text-sm text-red-400">{rangeError}</p>}
-              {rangePreviewCount && !rangeError && (
-                <p className="text-xs text-gray-500">{rangePreviewCount} rolls in range</p>
+
+              {twinMode === "single" && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Twin check
+                    <span className="ml-2 text-gray-500 font-normal text-xs">4 digits (e.g. 0042) or dash range (e.g. 0042-0051)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      ref={singleTwinRef}
+                      type="text"
+                      value={singleInput}
+                      onChange={(e) => { setSingleInput(e.target.value); setSingleError(null); }}
+                      onKeyDown={(e) => e.key === "Enter" && handleSingleSubmit()}
+                      placeholder="e.g. 0042 or 0042-0051"
+                      maxLength={9}
+                      className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                      style={{ backgroundColor: "#111111" }}
+                    />
+                    <button onClick={handleSingleSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40" style={{ backgroundColor: "#2a2a2a" }}>Add</button>
+                  </div>
+                  {singleError && <p className="text-sm text-red-400">{singleError}</p>}
+                  {twins.length > 0 && !singleInput && (
+                    <p className="text-xs text-gray-500">Press Enter on empty field to book {validTwinCount} roll{validTwinCount !== 1 ? "s" : ""}</p>
+                  )}
+                </div>
               )}
-            </div>
+
+              {twinMode === "range" && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Twin check range
+                    <span className="ml-2 text-gray-500 font-normal text-xs">Both must be exactly 4 digits</span>
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      ref={firstTwinRef}
+                      type="text"
+                      value={firstTwin}
+                      onChange={(e) => { setFirstTwin(e.target.value); setRangeError(null); }}
+                      onKeyDown={(e) => e.key === "Enter" && lastTwinRef.current?.focus()}
+                      placeholder="First (e.g. 0042)"
+                      maxLength={4}
+                      className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                      style={{ backgroundColor: "#111111" }}
+                    />
+                    <span className="text-gray-500 text-sm px-1">→</span>
+                    <input
+                      ref={lastTwinRef}
+                      type="text"
+                      value={lastTwin}
+                      onChange={(e) => { setLastTwin(e.target.value); setRangeError(null); }}
+                      onKeyDown={(e) => e.key === "Enter" && handleRangeSubmit()}
+                      placeholder="Last (e.g. 0051)"
+                      maxLength={4}
+                      className="flex-1 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 border border-[#2a2a2a] focus:outline-none focus:ring-2 focus:ring-[#ff6600] font-mono"
+                      style={{ backgroundColor: "#111111" }}
+                    />
+                    <button onClick={handleRangeSubmit} disabled={saving} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40 whitespace-nowrap" style={{ backgroundColor: "#2a2a2a" }}>Add range</button>
+                  </div>
+                  {rangeError && <p className="text-sm text-red-400">{rangeError}</p>}
+                  {rangePreviewCount && !rangeError && (
+                    <p className="text-xs text-gray-500">{rangePreviewCount} rolls in range</p>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
+          {/* Twin check pills — reused as-is for both modes. Manual mode
+              populates this via addTwins() as staff type; auto mode
+              populates it in one shot from the allocate response. Same
+              rendering either way — this is the "one concept" component. */}
           {twins.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
@@ -922,14 +1267,20 @@ export default function IntakePage() {
                   >
                     {entry.twin}
                     {entry.status === "duplicate" && <span className="text-xs text-red-400">dup</span>}
-                    <button onClick={() => removeTwin(entry.twin)} className="text-gray-400 hover:text-white ml-0.5">×</button>
+                    {entry.collisionWarning && (
+                      <span className="text-xs text-amber-400" title="Collides with an open twin check — flagged, not blocked">⚠</span>
+                    )}
+                    {twinsAreEditable && (
+                      <button onClick={() => removeTwin(entry.twin)} className="text-gray-400 hover:text-white ml-0.5">×</button>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {twins.length > 0 && (
+          {/* Manual mode — Book button (unchanged) */}
+          {!autoEnabled && twins.length > 0 && (
             <div className="pt-2 space-y-2">
               {saveError && <p className="text-sm text-red-400">{saveError}</p>}
               <button
@@ -939,6 +1290,31 @@ export default function IntakePage() {
                 style={{ backgroundColor: "#ff6600" }}
               >
                 {saving ? "Saving..." : `${dupAction === "add" ? "Add" : "Book"} ${validTwinCount} roll${validTwinCount !== 1 ? "s" : ""}`}
+              </button>
+            </div>
+          )}
+
+          {/* Auto mode — post-allocation: range label + print + next booking */}
+          {autoEnabled && allocatedOrderId && (
+            <div className="rounded-xl border border-green-500/30 p-4 space-y-2" style={{ backgroundColor: "#0a1f10" }}>
+              <p className="text-green-400 text-sm font-semibold">
+                Allocated{allocatedRangeLabel ? ` — ${allocatedRangeLabel}` : ` — ${twins.length} number${twins.length !== 1 ? "s" : ""}`}
+              </p>
+              {printError && <p className="text-sm text-red-400">{printError}</p>}
+              <button
+                onClick={handlePrintLabels}
+                disabled={printing}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
+                style={{ backgroundColor: "#2a2a2a" }}
+              >
+                {printing ? "Sending to printer…" : printedOnce ? "🖨 Print labels again" : "🖨 Print labels"}
+              </button>
+              <button
+                onClick={resetForNext}
+                className="w-full py-2.5 rounded-lg text-sm font-medium text-gray-300 border border-[#222222]"
+                style={{ backgroundColor: "#0f0f0f" }}
+              >
+                Done — next booking
               </button>
             </div>
           )}

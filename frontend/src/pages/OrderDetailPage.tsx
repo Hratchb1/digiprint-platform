@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ordersApi, rollsApi, emailsApi, driveApi, DiscardReason } from '../lib/api'
+import { ordersApi, rollsApi, emailsApi, driveApi, twinChecksApi, DiscardReason } from '../lib/api'
 import { useState } from 'react'
-import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail, Pencil, Phone, Trash2 } from 'lucide-react'
+import { ArrowLeft, FilmIcon, ExternalLink, AlertTriangle, ChevronDown, RefreshCw, CheckCircle, XCircle, Loader2, Mail, Pencil, Phone, Trash2, Printer, Ban } from 'lucide-react'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 import {
@@ -11,6 +11,8 @@ import {
 } from '../lib/status'
 import DiscardModal, { DISCARD_REASON_LABELS } from '../components/DiscardModal'
 import RefundBanner from '../components/RefundBanner'
+import VoidTwinCheckModal from '../components/VoidTwinCheckModal'
+import RescanModal from '../components/RescanModal'
 
 // Twin editing allowed on all statuses — collision check enforced on the backend
 
@@ -38,6 +40,8 @@ export default function OrderDetailPage() {
   const [twinValue, setTwinValue] = useState('')
   const [twinError, setTwinError] = useState('')
   const [showDiscardModal, setShowDiscardModal] = useState(false)
+  const [voidTarget, setVoidTarget] = useState<{ twinCheckId: string; twinCheck: string } | null>(null)
+  const [showRescanModal, setShowRescanModal] = useState(false)
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['order', id],
@@ -145,6 +149,35 @@ export default function OrderDetailPage() {
     },
     onError: (err: any) => {
       showToast('error', err?.response?.data?.detail || 'Failed to update twin check')
+    },
+  })
+
+  const reprintMutation = useMutation({
+    mutationFn: (twinCheckId: string) => twinChecksApi.reprint(twinCheckId),
+    onSuccess: () => showToast('success', 'Label re-sent to the print queue'),
+    onError: (err: any) => showToast('error', err?.response?.data?.detail || 'Failed to reprint label'),
+  })
+
+  const voidMutation = useMutation({
+    mutationFn: ({ twinCheckId, reason }: { twinCheckId: string; reason: string }) =>
+      twinChecksApi.void(twinCheckId, reason),
+    onSuccess: () => {
+      setVoidTarget(null)
+      showToast('success', 'Twin check voided')
+      invalidate()
+    },
+    onError: (err: any) => showToast('error', err?.response?.data?.detail || 'Failed to void twin check'),
+  })
+
+  const rescanMutation = useMutation({
+    mutationFn: (rollIds: string[]) => twinChecksApi.rescan(id!, rollIds),
+    onSuccess: (result) => {
+      setShowRescanModal(false)
+      showToast('success', `Rescan created — ${result.range_label || `${result.twin_checks.length} twin check(s)`} allocated`)
+      invalidate()
+    },
+    onError: (err: any) => {
+      showToast('error', err?.response?.data?.detail || 'Failed to create rescan')
     },
   })
 
@@ -509,12 +542,51 @@ export default function OrderDetailPage() {
                     )}
 
                     <span className="text-[#555] text-xs flex-1">{roll.service_type}</span>
+                    {roll.collision_warning && (
+                      <span
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/25 text-[11px]"
+                        title="Collides with an open twin check on another order — flagged, not blocked. Acknowledge before sending scans."
+                      >
+                        <AlertTriangle size={10} /> Collision
+                      </span>
+                    )}
                     {roll.is_blank && (
                       <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-[11px]">Blank</span>
                     )}
                     <span className={clsx('px-2 py-0.5 rounded-full text-[11px] border', rollStatusStyle(roll.status))}>
                       {displayRollStatus(roll.status)}
                     </span>
+                    {/* Reprint / Void — one click to reach, per the build brief.
+                        Only shown once a twin_checks row exists (auto or manual
+                        entry post-migration-009); a legacy roll with no linked
+                        record gets neither, matching the "no backfill" design. */}
+                    {roll.twin_check_id && (
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {/* Auto-only — a manual twin check has no digital
+                            label (the sticker was pre-printed before it was
+                            typed in), so there's nothing to reprint. Void
+                            stays available for both: burning a wrongly
+                            entered number is meaningful regardless of
+                            source. */}
+                        {roll.twin_check_source === 'auto' && (
+                          <button
+                            onClick={() => reprintMutation.mutate(roll.twin_check_id)}
+                            disabled={reprintMutation.isPending}
+                            title="Reprint this label — same number, never reallocates"
+                            className="p-1 text-[#444] hover:text-[#ff6600] transition-colors disabled:opacity-40"
+                          >
+                            <Printer size={13} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setVoidTarget({ twinCheckId: roll.twin_check_id, twinCheck: roll.twin_check || '' })}
+                          title="Void this twin check"
+                          className="p-1 text-[#444] hover:text-red-400 transition-colors"
+                        >
+                          <Ban size={13} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -633,6 +705,24 @@ export default function OrderDetailPage() {
             </div>
           </div>
 
+          {/* Rescan — only offered once delivered (criterion #17) */}
+          {isDelivered && (
+            <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5">
+              <p className="text-[#555] text-xs uppercase tracking-wider mb-2">Rescan</p>
+              <p className="text-[#444] text-xs mb-3">
+                Customer returned for a rescan on some or all rolls. Creates a new linked order with
+                fresh twin checks — the originals are untouched. The label goes on the sleeve, never
+                the negative.
+              </p>
+              <button
+                onClick={() => setShowRescanModal(true)}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#0f0f0f] border border-[#2a2a2a] hover:border-[#ff6600]/40 text-[#555] hover:text-[#ff6600] rounded-lg text-xs transition-all"
+              >
+                <RefreshCw size={12} /> Rescan
+              </button>
+            </div>
+          )}
+
           {/* Discard — remove a mis-entered order from the pipeline */}
           {canDiscard && (
             <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-5">
@@ -681,6 +771,27 @@ export default function OrderDetailPage() {
           isPending={discardMutation.isPending}
           onConfirm={(reason, notes) => discardMutation.mutate({ reason, notes })}
           onClose={() => setShowDiscardModal(false)}
+        />
+      )}
+
+      {/* Void twin check modal */}
+      {voidTarget && (
+        <VoidTwinCheckModal
+          twinCheck={voidTarget.twinCheck}
+          isPending={voidMutation.isPending}
+          onConfirm={(reason) => voidMutation.mutate({ twinCheckId: voidTarget.twinCheckId, reason })}
+          onClose={() => setVoidTarget(null)}
+        />
+      )}
+
+      {/* Rescan modal */}
+      {showRescanModal && (
+        <RescanModal
+          orderNumber={order.order_number}
+          rolls={(order.rolls || []).map((r: any) => ({ id: r.id, twin_check: r.twin_check, service_type: r.service_type }))}
+          isPending={rescanMutation.isPending}
+          onConfirm={(rollIds) => rescanMutation.mutate(rollIds)}
+          onClose={() => setShowRescanModal(false)}
         />
       )}
     </div>

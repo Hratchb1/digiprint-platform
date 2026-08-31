@@ -7,6 +7,17 @@ export interface RollSummaryLine {
   qty: number;
 }
 
+export interface ProcessMixEntry {
+  process_code: string | null;
+  count: number;
+}
+
+export interface ProcessMix {
+  total: number;
+  mix: ProcessMixEntry[];
+  unmapped: boolean;
+}
+
 export interface ProntoOrderResult {
   found: boolean;
   sales_order_number: string;
@@ -21,6 +32,10 @@ export interface ProntoOrderResult {
   scan_summary: RollSummaryLine[];
   print_summary: RollSummaryLine[];
   synced_at: string;
+  // Twin check allocation — additive field, see api/pronto.py. How many
+  // rolls this order needs a twin check for, and their process-code mix,
+  // derived live from sku_map (not the coarser roll_summary above).
+  process_mix?: ProcessMix;
 }
 
 interface UseProntoLookupReturn {

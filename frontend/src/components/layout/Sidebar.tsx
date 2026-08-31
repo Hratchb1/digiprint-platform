@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, FilmIcon, PackagePlus, LogOut,
-  ChevronRight, Store, Sun, Moon, PanelLeftClose, PanelLeftOpen,
+  ChevronRight, Store, Sun, Moon, PanelLeftClose, PanelLeftOpen, Zap,
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useTheme } from '../../hooks/useTheme'
@@ -12,6 +12,9 @@ const NAV = [
   { to: '/orders', icon: FilmIcon, label: 'Orders' },
   { to: '/intake', icon: PackagePlus, label: 'Film Intake' },
 ]
+
+// Admin-only — twin check auto-allocation toggle (store_admin/master_admin).
+const ADMIN_NAV = { to: '/admin/twin-checks', icon: Zap, label: 'Twin Checks' }
 
 interface SidebarProps {
   mobile?: boolean
@@ -70,7 +73,7 @@ export default function Sidebar({ mobile = false, collapsed = false, onNavigate,
         {!slim && (
           <p className="text-[#444] text-[10px] uppercase tracking-widest font-medium px-3 mb-2">Menu</p>
         )}
-        {NAV.map(({ to, icon: Icon, label }) => (
+        {[...NAV, ...(user?.role === 'store_admin' || user?.role === 'master_admin' ? [ADMIN_NAV] : [])].map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
