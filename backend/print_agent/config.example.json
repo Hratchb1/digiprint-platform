@@ -1,0 +1,14 @@
+{
+  "store_id": "a90c273e-49ff-4733-b709-31066f2ec503",
+  "api_base_url": "http://localhost:8000/api",
+  "api_token": "REPLACE_WITH_store_settings.print_agent_token",
+  "printer_ip": "192.168.1.50",
+  "printer_port": 9100,
+  "poll_interval_seconds": 2,
+  "max_send_retries": 5,
+  "retry_backoff_seconds": 1.0,
+  "http_timeout_seconds": 5.0,
+  "log_file": "print_agent.log",
+  "log_max_bytes": 1048576,
+  "log_backup_count": 5
+}
