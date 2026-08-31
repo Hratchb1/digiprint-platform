@@ -6,8 +6,9 @@ from uuid import UUID
 from app.core.database import get_db
 from app.core.auth import get_current_user, assert_can_access
 from app.core.timeutils import utcnow
-from app.models.orm import Roll, RollAuditLog, OrderEvent, Order
+from app.models.orm import Roll, RollAuditLog, OrderEvent, Order, TwinCheck
 from app.models.schemas import TwinCheckUpdate
+from app.services import twin_check_service
 
 router = APIRouter(prefix="/rolls", tags=["rolls"])
 
@@ -79,6 +80,30 @@ async def update_twin_check(
 
     actor = current_user.get("initials") or current_user.get("email", "staff")
     user_id = current_user.get("id") or current_user.get("user_id")
+
+    # Keep the linked twin_checks row (if any) in step with the edit —
+    # otherwise a later Reprint would print the old number. If this roll
+    # predates migration 009 and has no twin_checks row yet, create one now
+    # (source='manual', since a hand-edit is definitionally manual) rather
+    # than leaving it inconsistent going forward. This is "fix on touch",
+    # not a bulk backfill of historical rolls (twin_check_service's
+    # collision detection deliberately doesn't require one to exist).
+    # payload.twin_check is already Pydantic-validated (TwinCheckUpdate) at
+    # this point, but record_manual_twin re-checks anyway (defense in depth
+    # — see its docstring), so this is wrapped the same as every other
+    # twin_check_service call site rather than assuming it can't raise.
+    try:
+        if roll.twin_check_id:
+            tc = await db.get(TwinCheck, roll.twin_check_id)
+            if tc and tc.status != "voided":
+                tc.number = int(payload.twin_check)
+                tc.collision_warning = await twin_check_service._collision_check(
+                    db, roll.store_id, payload.twin_check, exclude_roll_id=roll.id
+                )
+        else:
+            await twin_check_service.record_manual_twin(db, roll, payload.twin_check, actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     audit = RollAuditLog(
         roll_id=roll.id,

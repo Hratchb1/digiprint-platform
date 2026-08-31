@@ -11,6 +11,7 @@ from app.models.schemas import (
     OrderCreate, OrderStatusUpdate, DashboardStats
 )
 from app.core.timeutils import utcnow
+from app.services import twin_check_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,10 @@ class OrderService:
 
     async def create_order(self, db: AsyncSession, payload: OrderCreate, actor_label: str = "system") -> Order:
         existing_twins = await self._get_existing_twins(db, payload.store_id)
-        new_twins = [r.twin_check for r in payload.rolls]
+        # Auto-mode rolls arrive with twin_check=None (pending — filled in by
+        # a later /twin-checks/allocate call) and never participate in this
+        # pre-emptive dup check; only rolls with a real, typed value do.
+        new_twins = [r.twin_check for r in payload.rolls if r.twin_check]
         dups = [t for t in new_twins if t in existing_twins]
         if dups:
             raise ValueError(f"Twin checks already exist in this store: {', '.join(dups)}")
@@ -43,14 +47,11 @@ class OrderService:
         existing_inbound = await self._get_inbound_order_by_number(db, payload.order_number, payload.store_id)
         if existing_inbound:
             for roll_data in payload.rolls:
-                roll = Roll(
-                    order_id=existing_inbound.id,
-                    store_id=payload.store_id,
-                    twin_check=roll_data.twin_check,
-                    service_type=roll_data.service_type.value,
-                    operator_initials=payload.operator_initials,
+                await self._create_roll(
+                    db, order_id=existing_inbound.id, store_id=payload.store_id,
+                    roll_data=roll_data, operator_initials=payload.operator_initials,
+                    actor_label=actor_label,
                 )
-                db.add(roll)
 
             await self._promote_inbound_to_booked_in(
                 db, existing_inbound, actor_label=actor_label,
@@ -88,14 +89,11 @@ class OrderService:
         await db.flush()
 
         for roll_data in payload.rolls:
-            roll = Roll(
-                order_id=order.id,
-                store_id=payload.store_id,
-                twin_check=roll_data.twin_check,
-                service_type=roll_data.service_type.value,
-                operator_initials=payload.operator_initials,
+            await self._create_roll(
+                db, order_id=order.id, store_id=payload.store_id,
+                roll_data=roll_data, operator_initials=payload.operator_initials,
+                actor_label=actor_label,
             )
-            db.add(roll)
 
         if any(addon_flags.values()):
             logger.info(
@@ -112,6 +110,35 @@ class OrderService:
         await db.commit()
         await db.refresh(order)
         return order
+
+    async def _create_roll(
+        self, db: AsyncSession, order_id: UUID, store_id: UUID,
+        roll_data, operator_initials: Optional[str], actor_label: str,
+    ) -> Roll:
+        """
+        Create one Roll and, if it already carries a typed twin_check
+        (manual mode, or any booking in a store where auto_enabled is off),
+        also record it as a twin_checks row (source='manual') — see
+        twin_check_service.record_manual_twin. A pending auto-mode roll
+        (twin_check=None) is left for a later /twin-checks/allocate call.
+        """
+        roll = Roll(
+            order_id=order_id,
+            store_id=store_id,
+            twin_check=roll_data.twin_check,
+            process_code=roll_data.process_code,
+            service_type=roll_data.service_type.value,
+            operator_initials=operator_initials,
+        )
+        db.add(roll)
+        await db.flush()
+
+        if roll_data.twin_check:
+            await twin_check_service.record_manual_twin(
+                db, roll, roll_data.twin_check, actor_label
+            )
+
+        return roll
 
     def _get_addon_flags_from_pronto(self, order_number: str) -> dict:
         """
@@ -143,7 +170,10 @@ class OrderService:
     async def get_order(self, db: AsyncSession, order_id: UUID) -> Optional[Order]:
         result = await db.execute(
             select(Order)
-            .options(selectinload(Order.rolls), selectinload(Order.events), selectinload(Order.store))
+            .options(
+                selectinload(Order.rolls).selectinload(Roll.twin_check_ref),
+                selectinload(Order.events), selectinload(Order.store),
+            )
             .where(Order.id == order_id)
         )
         return result.scalar_one_or_none()
@@ -152,7 +182,7 @@ class OrderService:
         q = select(Order).where(Order.order_number == order_number)
         if store_id:
             q = q.where(Order.store_id == store_id)
-        q = q.options(selectinload(Order.rolls), selectinload(Order.store))
+        q = q.options(selectinload(Order.rolls).selectinload(Roll.twin_check_ref), selectinload(Order.store))
         result = await db.execute(q)
         return result.scalar_one_or_none()
 

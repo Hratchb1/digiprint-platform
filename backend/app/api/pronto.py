@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.services.pronto_sync import sync_pronto_cache
+from app.services.twin_check_service import compute_process_mix
 
 router = APIRouter(prefix="/pronto", tags=["pronto"])
 
@@ -67,6 +68,32 @@ async def lookup_order(
         units = line.get("shipped_units", 1)
         print_summary.append({"label": name, "qty": units})
 
+    # Twin check process mix — a LIVE join of this order's pronto_cache
+    # lines to sku_map, not the cached pronto_cache.service_type/film_type
+    # columns (those predate — and are unrelated to — sku_map's new
+    # requires_twin_check/process_code columns, and are null for a store
+    # whose enrichment lapsed; see twin_check_service module docstring).
+    # Purely additive field — every existing field above is unchanged.
+    mix_rows = await db.execute(
+        text(
+            "SELECT pc.sku_code, pc.shipped_units, "
+            "sm.requires_twin_check, sm.process_code "
+            "FROM pronto_cache pc "
+            "LEFT JOIN sku_map sm ON sm.sku_code = pc.sku_code "
+            "WHERE pc.sales_order_number = :order_num"
+        ),
+        {"order_num": order_number},
+    )
+    sku_lookup: dict = {}
+    mix_lines = []
+    for r in mix_rows.mappings():
+        mix_lines.append({"sku_code": r["sku_code"], "shipped_units": r["shipped_units"]})
+        sku_lookup[r["sku_code"]] = {
+            "requires_twin_check": bool(r["requires_twin_check"]),
+            "process_code": r["process_code"],
+        }
+    process_mix = compute_process_mix(mix_lines, sku_lookup)
+
     return {
         "found":                True,
         "sales_order_number":   row.sales_order_number,
@@ -82,6 +109,7 @@ async def lookup_order(
         "print_summary":        print_summary,
         "sku_lines":            sku_lines,
         "synced_at":            row.synced_at.isoformat() if row.synced_at else None,
+        "process_mix":          process_mix,
     }
 
 

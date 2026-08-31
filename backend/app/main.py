@@ -11,6 +11,7 @@ from app.api.rolls import router as rolls_router
 from app.api.pronto import router as pronto_router
 from app.api.drive import router as drive_router
 from app.api.emails import router as emails_router
+from app.api.twin_checks import router as twin_checks_router
 from app.services.pronto_sync import sync_pronto_cache
 from app.services.drive_watcher import run_drive_watcher
 
@@ -39,6 +40,7 @@ app.include_router(stores.router, prefix="/api")
 app.include_router(pronto_router, prefix="/api")
 app.include_router(drive_router, prefix="/api")
 app.include_router(emails_router, prefix="/api")
+app.include_router(twin_checks_router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(refund_warnings.router, prefix="/api/refund-warnings", tags=["refund_warnings"])
 # Underscore alias — the Phase 3 spec references both spellings

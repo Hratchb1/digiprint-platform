@@ -14,6 +14,7 @@ from app.models.schemas import (
 )
 from app.models.orm import Order, Roll, Store, OrderActivity
 from app.services.order_service import order_service
+from app.services import twin_check_service
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -221,7 +222,9 @@ async def add_rolls_to_order(
     assert_can_access(order, current_user)
 
     existing_twins = await order_service._get_existing_twins(db, order.store_id)
-    new_twins = [r.twin_check for r in payload.rolls]
+    # Pending (auto-mode) rolls carry twin_check=None and don't participate
+    # in this pre-emptive dup check — see order_service.create_order().
+    new_twins = [r.twin_check for r in payload.rolls if r.twin_check]
     dups = [t for t in new_twins if t in existing_twins]
     if dups:
         raise HTTPException(
@@ -234,10 +237,26 @@ async def add_rolls_to_order(
             order_id=order.id,
             store_id=order.store_id,
             twin_check=roll_payload.twin_check,
+            process_code=roll_payload.process_code,
             service_type=roll_payload.service_type,
             status="booked",
         )
         db.add(roll)
+        await db.flush()
+        # Manual twin (or any booking in a store where auto_enabled is off)
+        # also writes a twin_checks row — see twin_check_service.record_manual_twin.
+        # A pending auto-mode roll is left for a later /twin-checks/allocate call.
+        # record_manual_twin re-validates twin_check itself (defense in depth
+        # beyond RollIntake's own Pydantic validator) and raises ValueError on
+        # anything malformed — caught here so a bad value 400s cleanly instead
+        # of 500ing the whole request.
+        if roll_payload.twin_check:
+            try:
+                await twin_check_service.record_manual_twin(
+                    db, roll, roll_payload.twin_check, _actor(current_user)
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
     await order_service._log_event(
         db, order.id,
@@ -456,9 +475,18 @@ def _enrich(order: Order) -> dict:
     # pronto_order_date that was never reaching the frontend.
     order_date = _iso(order.pronto_order_date)
 
+    # Display order number carries the rescan suffix ("48213-B") — order_number
+    # itself is never modified by a rescan (see twin_check_service.create_rescan).
+    display_order_number = order.order_number
+    if order.rescan_display_suffix:
+        display_order_number = f"{order.order_number}-{order.rescan_display_suffix}"
+
     return {
         "id": str(order.id),
         "order_number": order.order_number,
+        "display_order_number": display_order_number,
+        "rescan_of_order_id": str(order.rescan_of_order_id) if order.rescan_of_order_id else None,
+        "rescan_display_suffix": order.rescan_display_suffix,
         "order_type": order.order_type,
         "order_date": order_date,
         "status": order.status,
@@ -509,6 +537,15 @@ def _enrich(order: Order) -> dict:
                 "id": str(r.id),
                 "order_id": str(r.order_id),
                 "twin_check": r.twin_check,
+                "twin_check_id": str(r.twin_check_id) if r.twin_check_id else None,
+                "process_code": r.process_code,
+                # collision_warning/source/twin_check_status read off the
+                # linked twin_checks row when one exists — a legacy roll
+                # (pre-dates migration 009, never backfilled) has none, so
+                # this is safely False/None rather than an error.
+                "collision_warning": bool(r.twin_check_ref.collision_warning) if r.twin_check_ref else False,
+                "twin_check_source": r.twin_check_ref.source if r.twin_check_ref else None,
+                "twin_check_status": r.twin_check_ref.status if r.twin_check_ref else None,
                 "service_type": r.service_type,
                 "status": r.status,
                 "is_blank": r.is_blank,
