@@ -106,12 +106,24 @@ class UserRead(BaseModel):
 # ── Roll intake ────────────────────────────────────────────────────────────
 
 class RollIntake(BaseModel):
-    twin_check: str
+    # Optional (migration 009): a store with twin_check_sequences.auto_enabled
+    # submits rolls with no twin_check at all — the roll is created pending
+    # (twin_check/twin_check_id both NULL) and filled in by a follow-up call
+    # to POST /orders/{id}/twin-checks/allocate. Manual-mode bookings (and
+    # any booking in a store where auto_enabled is off) still provide a real
+    # value here, exactly as before.
+    twin_check: Optional[str] = None
     service_type: ServiceType = ServiceType.dev_scan
+    # Process/chemistry code (C41/BW/RSC) — see sku_map.process_code. Only
+    # meaningful once a real twin_check exists; ignored for pending rolls
+    # (auto mode sets it from the SKU-derived mix at allocate time instead).
+    process_code: Optional[str] = None
 
     @field_validator("twin_check")
     @classmethod
-    def pad_twin(cls, v: str) -> str:
+    def pad_twin(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
         digits = "".join(c for c in v if c.isdigit())
         if not digits or len(digits) > 4:
             raise ValueError("Twin check must be 1-4 digits")
@@ -121,7 +133,7 @@ class RollIntake(BaseModel):
 class RollRead(BaseModel):
     id: UUID
     order_id: UUID
-    twin_check: str
+    twin_check: Optional[str] = None
     service_type: str
     status: str
     is_blank: bool
@@ -130,9 +142,123 @@ class RollRead(BaseModel):
     date_scanned: Optional[datetime]
     date_delivered: Optional[datetime]
     operator_initials: Optional[str]
+    # Twin check allocation fields (migration 009) — see TwinCheckRead below
+    # for the full record; these are the roll-list-friendly subset.
+    twin_check_id: Optional[UUID] = None
+    process_code: Optional[str] = None
+    collision_warning: bool = False
 
     class Config:
         from_attributes = True
+
+
+# ── Twin check allocation ────────────────────────────────────────────────
+
+class TwinCheckRead(BaseModel):
+    id: UUID
+    store_id: UUID
+    number: int
+    twin_check: str  # zero-padded 4-digit display form
+    cycle: Optional[int] = None
+    source: str  # 'auto' | 'manual'
+    order_id: Optional[UUID] = None
+    roll_id: Optional[UUID] = None
+    status: str  # allocated | printed | voided
+    collision_warning: bool
+    allocated_at: datetime
+    allocated_by: Optional[str] = None
+    printed_at: Optional[datetime] = None
+    voided_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AllocateResponse(BaseModel):
+    order_id: UUID
+    twin_checks: List[TwinCheckRead]
+    range_label: Optional[str] = None  # e.g. "4821-4830", None if non-contiguous/empty
+
+
+class VoidTwinCheckRequest(BaseModel):
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def reason_required(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("A void reason is required")
+        return v.strip()
+
+
+class AddRollPayload(BaseModel):
+    service_type: ServiceType = ServiceType.dev_scan
+    process_code: Optional[str] = None
+
+
+class RescanRequest(BaseModel):
+    roll_ids: List[UUID]
+
+    @field_validator("roll_ids")
+    @classmethod
+    def at_least_one(cls, v: List[UUID]) -> List[UUID]:
+        if not v:
+            raise ValueError("Select at least one roll to rescan")
+        return v
+
+
+class ProcessMixEntry(BaseModel):
+    process_code: Optional[str]
+    count: int
+
+
+class ProcessMixResponse(BaseModel):
+    total: int
+    mix: List[ProcessMixEntry]
+    unmapped: bool
+
+
+class PrintQueueJobRead(BaseModel):
+    id: UUID
+    store_id: UUID
+    zpl: str
+    status: str
+    created_at: datetime
+    sent_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PrintQueueAckRequest(BaseModel):
+    status: str  # 'sent' | 'failed'
+    error: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def valid_status(cls, v: str) -> str:
+        if v not in ("sent", "failed"):
+            raise ValueError("status must be 'sent' or 'failed'")
+        return v
+
+
+class TwinCheckSequenceRead(BaseModel):
+    store_id: UUID
+    current_value: int
+    cycle: int
+    min_value: int
+    max_value: int
+    auto_enabled: bool
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TwinCheckSequenceUpdate(BaseModel):
+    auto_enabled: bool
 
 
 class RollsAddPayload(BaseModel):

@@ -37,3 +37,8 @@ Desktop.ini
 # ── Logs / misc ─────────────────────────────────────────────
 *.log
 *.bak
+
+# ── Claude Code local/vendored ───────────────────────────────
+.claude/settings.local.json
+.claude/skills/supabase
+.claude/skills/supabase-postgres-best-practices

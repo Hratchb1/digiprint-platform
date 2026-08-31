@@ -124,6 +124,14 @@ class Order(Base):
     operator_initials = Column(Text)
     notes = Column(Text)
 
+    # --- Rescan linkage (migration 009) ---
+    # rescan_display_suffix is set once at creation and never touched
+    # again; order_number itself is never modified by a rescan — the
+    # display order number is assembled at read time as
+    # "{order_number}-{rescan_display_suffix}" in api/orders.py::_enrich().
+    rescan_of_order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id"))
+    rescan_display_suffix = Column(Text)
+
     store = relationship("Store", back_populates="orders")
     rolls = relationship("Roll", back_populates="order", cascade="all, delete-orphan")
     events = relationship("OrderEvent", back_populates="order", cascade="all, delete-orphan")
@@ -136,9 +144,27 @@ class Roll(Base):
     order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
     store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False)
 
-    twin_check = Column(Text, nullable=False)
+    # Nullable (migration 009): an auto-mode roll exists before it has a
+    # real number — NULL means "not yet allocated", not a sentinel string.
+    # Manual-mode rolls (and manual entry inside an auto-enabled store)
+    # still get a real value at creation time, exactly as before.
+    twin_check = Column(Text, nullable=True)
+    # FK to twin_checks — set for both auto- and manually-entered twins
+    # once a twin_checks row exists for this roll (migration 009). A
+    # legacy roll booked before this feature has twin_check populated
+    # but twin_check_id NULL — deliberately not backfilled, see
+    # twin_check_service's collision-detection note.
+    twin_check_id = Column(UUID(as_uuid=True), ForeignKey("twin_checks.id"))
+    # Process/chemistry code (C41/BW/RSC) — see sku_map.process_code
+    # (migration 009). Distinct from service_type, which is workflow
+    # stage, not chemistry.
+    process_code = Column(Text, ForeignKey("process_codes.code"))
     service_type = Column(Text, nullable=False, default="Dev+Scan")
     status = Column(Text, nullable=False, default="booked")
+
+    # Eager-loadable link to the twin_checks row (for collision_warning /
+    # source / status display in the roll list) — see api/orders.py::_enrich().
+    twin_check_ref = relationship("TwinCheck", foreign_keys=[twin_check_id])
 
     is_blank = Column(Boolean, default=False)
     blank_confirmed_at = Column(DateTime(timezone=True))
@@ -229,3 +255,63 @@ class VendorRelease(Base):
     dispatched_at = Column(DateTime(timezone=True))
 
     vendor = relationship("Vendor", back_populates="releases")
+
+
+# ── Twin check allocation (migration 009) ───────────────────────────────────
+# See backend/migrations/009_twin_check_allocation.sql for the full design
+# rationale. Summary: a twin check is one concept regardless of provenance —
+# twin_checks.source ('auto'|'manual') is the entire distinction. Only 'auto'
+# rows are drawn from TwinCheckSequence and carry a real cycle; collision
+# detection reads Roll.twin_check (not this table) because historical rolls
+# predating this feature have no TwinCheck row and are deliberately not
+# backfilled.
+
+class ProcessCode(Base):
+    __tablename__ = "process_codes"
+
+    code = Column(Text, primary_key=True)
+    label = Column(Text, nullable=False)
+
+
+class TwinCheckSequence(Base):
+    __tablename__ = "twin_check_sequences"
+
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id"), primary_key=True)
+    current_value = Column(Integer, nullable=False, default=0)
+    cycle = Column(Integer, nullable=False, default=1)
+    min_value = Column(Integer, nullable=False, default=1)
+    max_value = Column(Integer, nullable=False, default=9999)
+    auto_enabled = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TwinCheck(Base):
+    __tablename__ = "twin_checks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False)
+    number = Column(Integer, nullable=False)
+    # NULL for source='manual' — never sequence-derived (see module docstring).
+    cycle = Column(Integer, nullable=True)
+    source = Column(Text, nullable=False)  # 'auto' | 'manual'
+    order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id"))
+    roll_id = Column(UUID(as_uuid=True), ForeignKey("rolls.id"))
+    status = Column(Text, nullable=False, default="allocated")  # allocated|printed|voided
+    collision_warning = Column(Boolean, nullable=False, default=False)
+    allocated_at = Column(DateTime(timezone=True), server_default=func.now())
+    allocated_by = Column(Text)
+    printed_at = Column(DateTime(timezone=True))
+    voided_at = Column(DateTime(timezone=True))
+    void_reason = Column(Text)
+
+
+class PrintJob(Base):
+    __tablename__ = "print_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False)
+    zpl = Column(Text, nullable=False)
+    status = Column(Text, nullable=False, default="pending")  # pending|sent|failed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    sent_at = Column(DateTime(timezone=True))
+    error = Column(Text)
